@@ -1,0 +1,263 @@
+---
+title: 'Networking'
+description: 'IP stacks, WiFi drivers, BLE, AWS IoT cloud connectivity, and Ethernet configuration for RA MCUs using FSP.'
+keywords: ['LwIP', 'NetX Duo', 'FreeRTOS+TCP', 'WiFi', 'BLE', 'AWS IoT', 'MQTT', 'Ethernet', 'rm_comms']
+---
+
+FSP provides a layered networking stack that spans from low-level Ethernet MAC drivers up to cloud-connectivity libraries for AWS IoT. Applications choose between two IP stacks—**LwIP** (FreeRTOS ecosystem) or **NetX Duo** (Eclipse ThreadX ecosystem)—and can use wired Ethernet, WiFi modules, or on-chip BLE.
+
+## IP stacks
+
+<Tabs>
+  <Tab title="LwIP">
+    LwIP (lightweight IP) is an open-source TCP/IP stack that runs with or without an RTOS. FSP integrates it through a set of port modules.
+
+    | Module | Role |
+    |--------|------|
+    | `rm_lwip_ether` | Ethernet driver wrapper that connects `r_ether` to the LwIP netif layer |
+    | `rm_lwip_sys_freertos` | OS abstraction layer for FreeRTOS (sys_arch implementation) |
+    | `rm_lwip_sys_baremetal` | Polling-mode sys_arch for bare-metal applications |
+    | `lwip_tcpip` | LwIP TCPIP thread, required when running with an RTOS |
+
+    LwIP supports a wide range of application-layer protocols, all available as RASC stack modules:
+
+    - **HTTP server** (`LwIP HTTP Server`, `LwIP HTTP Server FS`)
+    - **MQTT client** (`lwIP MQTT Client`)
+    - **SNTP** (`lwIP SNTP`)
+    - **SMTP** (`lwIP SMTP`)
+    - **NETBIOS responder** (`lwIP NETBIOS responder`)
+    - **Iperf** (`lwIP Iperf`) — for network throughput testing
+    - **TLS** via `Altcp TLS MbedTLS` — wraps LwIP's altcp layer with MbedTLS
+
+    ### Configuring LwIP with Ethernet in RASC
+
+    <Steps>
+      <Step title="Add the Ethernet driver">
+        In the Stacks configurator, add **Ethernet (r_ether)** and its companion **Ethernet (r_ether_phy)**. Set the PHY address and speed/duplex settings in the properties panel.
+      </Step>
+      <Step title="Add the LwIP wrapper">
+        Add **lwIP Wrapper to (rm_lwip_ether)**. This module links `r_ether` callbacks to the LwIP netif input path.
+      </Step>
+      <Step title="Add the OS layer">
+        For FreeRTOS applications, add **lwIP system FreeRTOS port** (`rm_lwip_sys_freertos`). For bare-metal, add **lwIP system baremetal**.
+      </Step>
+      <Step title="Add application protocols">
+        Add the required application protocol modules (e.g., **lwIP MQTT Client**, **LwIP HTTP Server**) on top of the IP instance.
+      </Step>
+      <Step title="Configure lwipopts.h">
+        Generate the project. Edit `lwipopts.h` (created in `src/`) to set `MEM_SIZE`, `PBUF_POOL_SIZE`, `LWIP_TCP`, `LWIP_UDP`, and thread stack sizes to match your device's RAM budget.
+      </Step>
+    </Steps>
+
+    ```c
+    #include "lwip/tcpip.h"
+    #include "lwip/dhcp.h"
+    #include "rm_lwip_ether.h"
+
+    /* Called after tcpip_init completes */
+    static void netif_ready_callback(void * arg)
+    {
+        struct netif * netif = (struct netif *) arg;
+        dhcp_start(netif);
+    }
+
+    void app_network_init(void)
+    {
+        struct netif * p_netif = rm_lwip_ether_netif_get(0); /* Get netif for port 0 */
+        tcpip_init(netif_ready_callback, p_netif);
+    }
+    ```
+  </Tab>
+  <Tab title="NetX Duo">
+    NetX Duo is the Eclipse ThreadX dual-stack (IPv4 + IPv6) network library. It runs as a ThreadX thread and provides a comprehensive set of protocols.
+
+    | Module | Role |
+    |--------|------|
+    | `rm_netxduo_ether` | NetX Duo Ethernet driver for `r_ether` |
+    | `rm_netxduo_wifi` | NetX Duo WiFi network driver |
+    | NetX Duo Common | Core IP stack (IP instance + packet pool) |
+
+    Available NetX Duo protocol modules in FSP:
+
+    - DHCP client/server (IPv4 and IPv6)
+    - DNS client
+    - MQTT client
+    - HTTP client/server, Web HTTP/HTTPS client/server
+    - FTP client/server, TFTP client/server
+    - SMTP client, SNTP client, POP3 client
+    - SNMP agent
+    - Telnet client/server
+    - NAT
+    - BSD compatibility socket layer
+    - Auto IP
+    - **NetX Secure** — TLS 1.2/1.3 with optional hardware crypto acceleration (`rm_netx_secure_crypto`)
+    - **NetX Crypto** — standalone cryptographic library
+
+    <Warning>
+    The modules listed in RASC as "Azure RTOS NetX Secure" and "Azure RTOS NetX Crypto" are based on Eclipse ThreadX. The "Azure RTOS" label reflects the historical name; the underlying source is the Eclipse ThreadX project maintained at github.com/eclipse-threadx.
+    </Warning>
+  </Tab>
+  <Tab title="FreeRTOS+TCP">
+    FreeRTOS+TCP is a lightweight TCP/IP stack tightly coupled to FreeRTOS. FSP connects it to the Ethernet hardware through `rm_freertos_plus_tcp` and to the TCP transport interface via `r_tcp_trans_freertos_plus_tcp`.
+
+    ```c
+    /* FreeRTOS+TCP initialization — called from a FreeRTOS task */
+    #include "FreeRTOS_IP.h"
+
+    static const uint8_t ucIPAddress[4]      = { 192, 168, 1, 100 };
+    static const uint8_t ucNetMask[4]        = { 255, 255, 255, 0 };
+    static const uint8_t ucGatewayAddress[4] = { 192, 168, 1, 1 };
+    static const uint8_t ucDNSServerAddress[4] = { 8, 8, 8, 8 };
+    static const uint8_t ucMACAddress[6]     = { 0x00, 0x11, 0x22, 0x33, 0x44, 0x55 };
+
+    void network_task_entry(void * pvParameters)
+    {
+        FSP_PARAMETER_NOT_USED(pvParameters);
+
+        FreeRTOS_IPInit(ucIPAddress,
+                        ucNetMask,
+                        ucGatewayAddress,
+                        ucDNSServerAddress,
+                        ucMACAddress);
+        /* Task can now use FreeRTOS_connect(), FreeRTOS_send(), etc. */
+        for (;;)
+        {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## WiFi
+
+FSP includes drivers for two families of external WiFi modules. Both implement the common `rm_wifi_api.h` interface (`WIFIReturnCode_t WIFI_On()`, `WIFI_ConnectAP()`, etc.).
+
+<CardGroup cols={2}>
+  <Card title="DA16XXX (rm_wifi_da16xxx)" icon="wifi">
+    Dialog Semiconductor DA16XXX ultra-low-power WiFi module. Communicates over UART using AT commands via the `rm_at_transport_da16xxx_uart` transport layer. Also supports on-chip HTTP (`rm_http_onchip_da16xxx`) and MQTT (`rm_mqtt_onchip_da16xxx`) offloading.
+  </Card>
+  <Card title="Silex UART (rm_wifi_onchip_silex)" icon="wifi">
+    Silex Technology on-chip WiFi module using UART. Integrates with FreeRTOS+TCP through `rm_aws_sockets_wrapper_silex` for AWS IoT connectivity.
+  </Card>
+</CardGroup>
+
+### Connecting to an access point
+
+```c
+#include "rm_wifi_api.h"
+
+WIFIReturnCode_t wifi_connect_example(void)
+{
+    WIFIReturnCode_t ret;
+
+    ret = WIFI_On();
+    if (ret != eWiFiSuccess)
+    {
+        return ret;
+    }
+
+    WIFINetworkParams_t params =
+    {
+        .ucSSIDLength = 10,
+        .xSecurity    = eWiFiSecurityWPA2,
+        .ucChannel    = 0,   /* 0 = auto */
+    };
+    memcpy(params.ucSSID, "MyNetwork1", 10);
+    memcpy(params.xPassword.xWPA.cPassphrase, "s3cr3tpass", 10);
+    params.xPassword.xWPA.ucLength = 10;
+
+    ret = WIFI_ConnectAP(&params);
+    if (ret == eWiFiSuccess)
+    {
+        WIFIIPConfiguration_t ip_info;
+        WIFI_GetIPInfo(&ip_info);
+    }
+    return ret;
+}
+```
+
+## AWS IoT
+
+<CardGroup cols={2}>
+  <Card title="AWS Core MQTT" icon="message-square">
+    coreMQTT client library for MQTT 3.1.1. Pairs with `rm_aws_transport_interface_port` (MbedTLS/PKCS#11) or WiFi socket wrappers for the transport layer.
+  </Card>
+  <Card title="AWS Core HTTP" icon="globe">
+    coreHTTP client library for HTTP/1.1. Uses the same transport interface as coreMQTT.
+  </Card>
+  <Card title="AWS IoT OTA" icon="download">
+    Over-the-air update library (`AWS IoT Over-the-air Update Library`). Integrates with MCUboot via `rm_mcuboot_port` for secure image verification and swap.
+  </Card>
+  <Card title="AWS Cellular" icon="signal">
+    Cellular connectivity via GM-series modules (`rm_cellular_gm_aws`). Provides the same socket abstraction used by coreMQTT and coreHTTP.
+  </Card>
+</CardGroup>
+
+<Tip>
+For production AWS IoT deployments, use `rm_aws_pkcs11_pal_littlefs` to store device credentials (private key, certificate) in a LittleFS partition on internal or SPI flash, and enable the RSIP or SCE protected mode for private key operations.
+</Tip>
+
+## BLE
+
+<CardGroup cols={2}>
+  <Card title="BLE Abstraction (rm_ble_abs)" icon="bluetooth">
+    High-level BLE abstraction API over the Renesas BLE stack. Supports three driver variants: `r_ble_balance`, `r_ble_compact`, and `r_ble_extended`. Transport is SPI (`rm_ble_abs_spp_transport`) or UART for SPP, or UART/SPI for GTL (`rm_ble_abs_gtl`).
+  </Card>
+  <Card title="BLE Mesh" icon="network">
+    Full Bluetooth Mesh profile stack (`rm_ble_mesh`), including access, network, transport, bearer, and provisioning layers. A comprehensive set of Mesh model modules (Generic, Light, Sensor, Scene, Health, Time, Scheduler) is available as separate RASC stacks.
+  </Card>
+</CardGroup>
+
+BLE stack variants:
+
+| Variant | Module | Profile |
+|---------|--------|---------|
+| Balance | `r_ble_balance` / `r_ble_balance_freertos` / `r_ble_balance_threadx` | Balanced code/RAM trade-off |
+| Compact | `r_ble_compact` | Minimal code size |
+| Extended | `r_ble_extended` | Maximum feature set |
+| GTL | `rm_ble_abs_gtl` + `DA14531 GTL Driver Layer` | External DA14531 chip over UART/SPI |
+
+## Ethernet
+
+The `r_ether` driver provides access to the RA Ethernet MAC. A companion PHY driver (`r_ether_phy`, `r_rmac_phy`, `r_ethercat_phy`) handles PHY register access for auto-negotiation and link status detection.
+
+Additional Ethernet capabilities:
+
+- **PTP / gPTP** — precision time protocol via `r_ptp` and `rm_gptp_middleware` (including `rm_gptp_eswm` for the RA8T1 Ethernet switch)
+- **EtherCAT** — real-time fieldbus via `rm_ethercat_ssc_port`
+- **Modbus TCP** — `r_modbus_tcp_server`
+- **Modbus Serial** — `r_modbus_serial_slave` over SCI UART
+
+## Communication abstraction layer
+
+The `rm_comms_*` modules provide a **device-centric abstraction** over the low-level bus drivers. Instead of managing bus arbitration directly, sensor or peripheral drivers use a `rm_comms` instance that can be shared across devices on the same bus.
+
+<CardGroup cols={2}>
+  <Card title="rm_comms_i2c" icon="circuit-board">
+    I2C bus abstraction. Supports shared bus (`I2C Shared Bus`) and dedicated device configurations. Backed by `r_iic_master`, `r_iic_b_master`, `r_sci_i2c`, `r_sci_b_i2c`, or `r_sau_i2c`.
+  </Card>
+  <Card title="rm_comms_spi" icon="circuit-board">
+    SPI bus abstraction with chip-select management. Backed by `r_spi`, `r_spi_b`, `r_sci_spi`, `r_sci_b_spi`, or `r_sau_spi`.
+  </Card>
+  <Card title="rm_comms_uart" icon="terminal">
+    UART device abstraction. Backed by any `r_sci_uart`, `r_sci_b_uart`, `r_sau_uart`, or `r_uarta` instance.
+  </Card>
+  <Card title="rm_comms_socket" icon="network">
+    Socket device abstraction for TCP/IP-connected peripherals.
+  </Card>
+</CardGroup>
+
+The `rm_comms_smbus` module extends `rm_comms_i2c` with SMBus-specific framing (PEC, block read/write, process call).
+
+```c
+/* Example: write to a sensor using rm_comms_i2c abstraction */
+#include "rm_comms_i2c.h"
+
+/* g_comms_i2c_device0 is generated by RASC */
+uint8_t config_reg[2] = { 0x01, 0x85 }; /* register address + value */
+
+fsp_err_t err = RM_COMMS_I2C_Write(&g_comms_i2c_device0_ctrl,
+                                    config_reg,
+                                    sizeof(config_reg));
+```

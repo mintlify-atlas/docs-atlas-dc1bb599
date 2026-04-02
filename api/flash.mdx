@@ -1,0 +1,372 @@
+---
+title: "Flash Interface"
+description: "Internal flash memory API for Renesas FSP, covering code flash and data flash operations with BGO (Background Operation) support."
+---
+
+## Overview
+
+The flash interface (`r_flash_api.h`) provides read, write, erase, and blank-check operations for both the **code flash** and **data flash** regions of RA microcontrollers. Key capabilities include:
+
+- Blocking and non-blocking (Background Operation, BGO) modes
+- Blank-check before write to prevent over-programming
+- Access window protection for code flash regions
+- ID code locking to restrict debug access
+- Dual-bank and startup area swap for OTA firmware updates
+- Anti-rollback counters (RA8 TrustZone devices)
+
+```c
+#include "r_flash_api.h"
+```
+
+### Available Instances
+
+| Instance header | Description |
+|---|---|
+| `r_flash_hp.h` | Flash HP — high-performance, supports code and data flash, dual bank, BGO |
+| `r_flash_lp.h` | Flash LP — low-power, data flash only BGO, no error IRQ |
+
+---
+
+## Code Flash vs. Data Flash
+
+| Property | Code Flash | Data Flash |
+|---|---|---|
+| Purpose | Stores program code and read-only data | Stores frequently-updated non-volatile data |
+| Write granularity | Larger minimum write size (device-specific) | 4 bytes minimum (device-specific) |
+| Erase granularity | Larger blocks (typically 8 kB or 32 kB) | Small blocks (typically 64 bytes) |
+| Endurance | Lower (typically 10,000 cycles) | Higher (typically 100,000 cycles) |
+| BGO support | HP variant only | Both HP and LP variants |
+| Execution | Application runs from code flash being written? No — code must run from RAM or a separate bank |  |
+
+<Note>
+  Before writing to either flash region, erase the target blocks. Attempting to write to a non-erased area results in `FSP_ERR_PE_FAILURE` or `FLASH_EVENT_ERR_DF_ACCESS` / `FLASH_EVENT_ERR_CF_ACCESS`.
+</Note>
+
+---
+
+## Enumerations
+
+### `flash_event_t`
+
+Events passed to the user callback when BGO mode is used.
+
+<ParamField path="FLASH_EVENT_ERASE_COMPLETE" type="0">
+  Erase operation completed successfully.
+</ParamField>
+
+<ParamField path="FLASH_EVENT_WRITE_COMPLETE" type="1">
+  Write operation completed successfully.
+</ParamField>
+
+<ParamField path="FLASH_EVENT_BLANK" type="2">
+  Blank-check completed; the specified area is blank (all 0xFF).
+</ParamField>
+
+<ParamField path="FLASH_EVENT_NOT_BLANK" type="3">
+  Blank-check completed; the specified area contains non-0xFF data.
+</ParamField>
+
+<ParamField path="FLASH_EVENT_ERR_DF_ACCESS" type="4">
+  Data flash operation failed (e.g., writing to a non-erased area).
+</ParamField>
+
+<ParamField path="FLASH_EVENT_ERR_CF_ACCESS" type="5">
+  Code flash operation failed.
+</ParamField>
+
+<ParamField path="FLASH_EVENT_ERR_CMD_LOCKED" type="6">
+  Flash command controller is in a locked state (illegal command sequence).
+</ParamField>
+
+<ParamField path="FLASH_EVENT_ERR_FAILURE" type="7">
+  Erase or program operation failed generically.
+</ParamField>
+
+<ParamField path="FLASH_EVENT_ERR_ONE_BIT" type="8">
+  1-bit ECC error detected and corrected. The offending address is in `flash_callback_args_t::data`.
+</ParamField>
+
+<ParamField path="FLASH_EVENT_ERR_TWO_BIT" type="9">
+  2-bit ECC error detected and corrected.
+</ParamField>
+
+<ParamField path="FLASH_EVENT_ERR_ECC" type="10">
+  Uncorrectable ECC error detected while reading. The address is in `flash_callback_args_t::data`.
+</ParamField>
+
+---
+
+### `flash_result_t`
+
+Returned synchronously from `blankCheck()` in non-BGO mode.
+
+| Value | Description |
+|---|---|
+| `FLASH_RESULT_BLANK` | Specified area is blank |
+| `FLASH_RESULT_NOT_BLANK` | Specified area contains data |
+| `FLASH_RESULT_BGO_ACTIVE` | BGO mode — result delivered via callback |
+
+---
+
+### `flash_status_t`
+
+| Value | Description |
+|---|---|
+| `FLASH_STATUS_IDLE` | Flash is idle and available |
+| `FLASH_STATUS_BUSY` | Flash is processing a BGO command |
+
+---
+
+### `flash_startup_area_swap_t`
+
+Used with `startupAreaSelect()` for dual-bank OTA.
+
+| Value | Description |
+|---|---|
+| `FLASH_STARTUP_AREA_BTFLG` | Startup block determined by BTFLG fuse |
+| `FLASH_STARTUP_AREA_BLOCK0` | Boot from block 0 on next reset |
+| `FLASH_STARTUP_AREA_BLOCK1` | Boot from block 1 |
+
+---
+
+### `flash_arc_t`
+
+Anti-rollback counter selection (RA8 TrustZone devices only).
+
+| Value | Counter |
+|---|---|
+| `FLASH_ARC_SEC` | Secure application |
+| `FLASH_ARC_OEMBL` | OEM bootloader |
+| `FLASH_ARC_NSEC_0` | Non-secure application 0 |
+| `FLASH_ARC_NSEC_1` | Non-secure application 1 |
+| `FLASH_ARC_NSEC_2` | Non-secure application 2 |
+| `FLASH_ARC_NSEC_3` | Non-secure application 3 |
+
+---
+
+## Structures
+
+### `flash_cfg_t`
+
+<ParamField path="data_flash_bgo" type="bool" required>
+  Set `true` to enable Background Operation for data flash. In BGO mode, `write()`, `erase()`, and `blankCheck()` return immediately and the result is notified via callback.
+</ParamField>
+
+<ParamField path="p_callback" type="void (*)(flash_callback_args_t *)">
+  Callback invoked when a BGO operation completes or an error occurs. Required when `data_flash_bgo` is `true`.
+</ParamField>
+
+<ParamField path="p_extend" type="void const *">
+  Driver-specific extended configuration. Set to `NULL` for defaults.
+</ParamField>
+
+<ParamField path="p_context" type="void *">
+  User data pointer passed to the callback.
+</ParamField>
+
+<ParamField path="ipl" type="uint8_t">
+  Flash ready interrupt priority.
+</ParamField>
+
+<ParamField path="irq" type="IRQn_Type">
+  Flash ready interrupt number.
+</ParamField>
+
+<ParamField path="err_ipl" type="uint8_t">
+  Flash error interrupt priority (HP only; unused in LP).
+</ParamField>
+
+<ParamField path="err_irq" type="IRQn_Type">
+  Flash error interrupt number (HP only; unused in LP).
+</ParamField>
+
+---
+
+### `flash_callback_args_t`
+
+<ParamField path="event" type="flash_event_t">
+  The flash event that triggered the callback.
+</ParamField>
+
+<ParamField path="data" type="uint32_t">
+  Event-specific data. For ECC error events, contains the flash address where the error occurred.
+</ParamField>
+
+<ParamField path="p_context" type="void *">
+  User context from `flash_cfg_t`.
+</ParamField>
+
+---
+
+## API — `flash_api_t`
+
+### `open`
+
+```c
+fsp_err_t (* open)(flash_ctrl_t * const p_ctrl, flash_cfg_t const * const p_cfg);
+```
+
+Initialises the flash driver. Must be called before any flash operation.
+
+### `write`
+
+```c
+fsp_err_t (* write)(flash_ctrl_t * const p_ctrl, uint32_t const src_address,
+                    uint32_t const flash_address, uint32_t const num_bytes);
+```
+
+Writes `num_bytes` from RAM (`src_address`) to flash (`flash_address`). Both addresses and `num_bytes` must be aligned to the programming line size of the target region.
+
+### `erase`
+
+```c
+fsp_err_t (* erase)(flash_ctrl_t * const p_ctrl, uint32_t const address,
+                    uint32_t const num_blocks);
+```
+
+Erases `num_blocks` contiguous blocks starting from the block containing `address`.
+
+### `blankCheck`
+
+```c
+fsp_err_t (* blankCheck)(flash_ctrl_t * const p_ctrl, uint32_t const address,
+                         uint32_t const num_bytes,
+                         flash_result_t * const p_blank_check_result);
+```
+
+Checks whether the specified area is blank. In non-BGO mode, `*p_blank_check_result` is set to `FLASH_RESULT_BLANK` or `FLASH_RESULT_NOT_BLANK` before the function returns. In BGO mode it is set to `FLASH_RESULT_BGO_ACTIVE` and the actual result arrives via callback.
+
+### `infoGet`
+
+```c
+fsp_err_t (* infoGet)(flash_ctrl_t * const p_ctrl, flash_info_t * const p_info);
+```
+
+Returns `flash_info_t` describing the block sizes and address ranges for code flash and data flash regions on the current device.
+
+### `statusGet`
+
+```c
+fsp_err_t (* statusGet)(flash_ctrl_t * const p_ctrl, flash_status_t * const p_status);
+```
+
+Returns `FLASH_STATUS_IDLE` or `FLASH_STATUS_BUSY`. Useful for polling BGO completion.
+
+### `accessWindowSet` / `accessWindowClear`
+
+```c
+fsp_err_t (* accessWindowSet)(flash_ctrl_t * const p_ctrl,
+                              uint32_t const start_addr, uint32_t const end_addr);
+fsp_err_t (* accessWindowClear)(flash_ctrl_t * const p_ctrl);
+```
+
+Restricts or removes code flash write/erase access to a specific address window, protecting firmware from accidental self-modification.
+
+### `startupAreaSelect`
+
+```c
+fsp_err_t (* startupAreaSelect)(flash_ctrl_t * const p_ctrl,
+                                flash_startup_area_swap_t swap_type,
+                                bool is_temporary);
+```
+
+Selects which block (0 or 1) is used as the startup area. Pass `is_temporary = true` to switch immediately for the current boot; `is_temporary = false` to persist the change across resets.
+
+### `bankSwap`
+
+```c
+fsp_err_t (* bankSwap)(flash_ctrl_t * const p_ctrl);
+```
+
+Swaps the active and standby banks (dual-bank Flash HP devices only). Used in OTA update flows to commit a newly written firmware image.
+
+### `close`
+
+```c
+fsp_err_t (* close)(flash_ctrl_t * const p_ctrl);
+```
+
+Closes the flash driver and releases resources.
+
+---
+
+## Write / Erase Example with Error Handling
+
+```c
+#include "r_flash_hp.h"
+
+flash_hp_instance_ctrl_t g_flash_ctrl;
+volatile bool            g_flash_done  = false;
+volatile flash_event_t   g_flash_event = FLASH_EVENT_ERASE_COMPLETE;
+
+static void flash_callback(flash_callback_args_t * p_args)
+{
+    g_flash_event = p_args->event;
+    g_flash_done  = true;
+}
+
+/* BGO configuration — callbacks for data flash operations */
+const flash_cfg_t g_flash_cfg =
+{
+    .data_flash_bgo = true,
+    .p_callback     = flash_callback,
+    .p_context      = NULL,
+    /* IRQ numbers and priorities set by Smart Configurator */
+};
+
+#define DATA_FLASH_BASE    0x08000000U
+#define WRITE_DATA_SIZE    8U          /* Must be a multiple of the minimum DF write size */
+
+static bool flash_wait(void)
+{
+    uint32_t timeout = 500000;
+    while (!g_flash_done && --timeout) {}
+    return (timeout > 0) && (g_flash_event != FLASH_EVENT_ERR_FAILURE)
+           && (g_flash_event != FLASH_EVENT_ERR_DF_ACCESS)
+           && (g_flash_event != FLASH_EVENT_ERR_CMD_LOCKED);
+}
+
+bool data_flash_write(uint32_t offset, const uint8_t * p_data, uint32_t len)
+{
+    fsp_err_t      err;
+    flash_result_t blank_result;
+    uint32_t       addr = DATA_FLASH_BASE + offset;
+
+    err = R_FLASH_HP_Open(&g_flash_ctrl, &g_flash_cfg);
+    if (FSP_SUCCESS != err) { return false; }
+
+    /* 1. Erase the target block */
+    g_flash_done = false;
+    err = R_FLASH_HP_Erase(&g_flash_ctrl, addr, 1);
+    if (FSP_SUCCESS != err || !flash_wait()) { goto fail; }
+    if (FLASH_EVENT_ERASE_COMPLETE != g_flash_event) { goto fail; }
+
+    /* 2. Blank-check (BGO mode — result via callback) */
+    g_flash_done = false;
+    err = R_FLASH_HP_BlankCheck(&g_flash_ctrl, addr, len, &blank_result);
+    if (FSP_SUCCESS != err) { goto fail; }
+    if (FLASH_RESULT_BGO_ACTIVE == blank_result)
+    {
+        if (!flash_wait()) { goto fail; }
+        if (FLASH_EVENT_BLANK != g_flash_event) { goto fail; }
+    }
+    else if (FLASH_RESULT_NOT_BLANK == blank_result) { goto fail; }
+
+    /* 3. Write data */
+    g_flash_done = false;
+    err = R_FLASH_HP_Write(&g_flash_ctrl, (uint32_t) p_data, addr, len);
+    if (FSP_SUCCESS != err || !flash_wait()) { goto fail; }
+    if (FLASH_EVENT_WRITE_COMPLETE != g_flash_event) { goto fail; }
+
+    R_FLASH_HP_Close(&g_flash_ctrl);
+    return true;
+
+fail:
+    R_FLASH_HP_Close(&g_flash_ctrl);
+    return false;
+}
+```
+
+<Note>
+  Data flash write and erase cannot occur while the CPU is executing from the same flash module. For `r_flash_hp`, code flash operations require that the executing code resides in RAM (copy to RAM and execute) or in the other bank (dual-bank mode). Data flash BGO operations can run while code executes from code flash.
+</Note>

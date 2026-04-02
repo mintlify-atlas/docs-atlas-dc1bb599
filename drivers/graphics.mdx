@@ -1,0 +1,354 @@
+---
+title: 'Graphics drivers'
+description: 'GLCDC, JPEG codec, D/AVE 2D (DRW), MIPI DSI/CSI, CEU, VIN, and graphics middleware for the Renesas RA family.'
+keywords: ['GLCDC', 'LVGL', 'GUIX', 'emWin', 'DRW', 'JPEG', 'MIPI', 'CEU', 'VIN', 'FSP', 'Renesas RA']
+---
+
+Graphics support in FSP covers the full pipeline from pixel rendering to panel output. Hardware accelerators reduce CPU load for blending, JPEG decoding, and 2D drawing. Software middleware ports connect the hardware to industry-standard UI frameworks.
+
+<Note>
+Graphics peripherals (GLCDC, JPEG, D/AVE 2D, MIPI DSI/CSI) are available on select RA series devices: **RA6M3**, **RA8D1**, and **RA8M1**. Lower-end RA2/RA4 devices do not include these peripherals.
+</Note>
+
+<CardGroup cols={2}>
+  <Card title="GLCDC" icon="display">
+    Graphics LCD Controller. Two hardware layers, alpha blending, color correction, and gamma correction.
+  </Card>
+  <Card title="D/AVE 2D (DRW)" icon="pen-nib">
+    TES D/AVE 2D hardware accelerator. Anti-aliased lines, arcs, filled primitives, and texture mapping.
+  </Card>
+  <Card title="JPEG codec" icon="image">
+    Hardware JPEG encoder/decoder (`r_jpeg`). Offloads JPEG operations from the CPU.
+  </Card>
+  <Card title="MIPI DSI / CSI" icon="camera">
+    MIPI Display Serial Interface (`r_mipi_dsi`) and Camera Serial Interface (`r_mipi_csi`) for high-resolution panels and image sensors.
+  </Card>
+  <Card title="CEU / VIN" icon="video">
+    Capture Engine Unit (`r_ceu`) and Video Input (`r_vin`) for parallel camera interfaces.
+  </Card>
+  <Card title="UI middleware" icon="layout-grid">
+    LVGL (`rm_lvgl_port`), Azure RTOS GUIX (`rm_guix_port`), SEGGER emWin (`rm_emwin_port`).
+  </Card>
+</CardGroup>
+
+---
+
+<Tabs>
+  <Tab title="GLCDC">
+
+## Graphics LCD Controller (r_glcdc)
+
+GLCDC drives RGB LCD panels with a parallel interface. It composites two independent graphics layers over a configurable background color, then outputs the result with programmable signal timing.
+
+### Display pipeline
+
+```
+Frame buffer 1 (Layer 1) ─┐
+                           ├─ Alpha blend ─→ Color correction ─→ Gamma ─→ LCD panel
+Frame buffer 2 (Layer 2) ─┘
+        └── Background color
+```
+
+Each layer provides:
+- Independent position (`display_coordinate_t`) and size
+- Per-layer fade-in/fade-out control (`display_fade_control_t`)
+- Color keying for transparency effects
+- CLUT (Color Look-Up Table) for indexed pixel formats
+
+### Supported pixel formats (input)
+
+| Format | Enum | Bits per pixel |
+|---|---|---|
+| ARGB8888 | `DISPLAY_IN_FORMAT_32BITS_ARGB8888` | 32 |
+| RGB888 | `DISPLAY_IN_FORMAT_32BITS_RGB888` | 32 (padded) |
+| RGB565 | `DISPLAY_IN_FORMAT_16BITS_RGB565` | 16 |
+| ARGB1555 | `DISPLAY_IN_FORMAT_16BITS_ARGB1555` | 16 |
+| ARGB4444 | `DISPLAY_IN_FORMAT_16BITS_ARGB4444` | 16 |
+| CLUT8 | `DISPLAY_IN_FORMAT_CLUT8` | 8 (indexed) |
+| CLUT4 | `DISPLAY_IN_FORMAT_CLUT4` | 4 (indexed) |
+| CLUT1 | `DISPLAY_IN_FORMAT_CLUT1` | 1 (monochrome) |
+
+### Output formats
+
+| Format | Enum | Notes |
+|---|---|---|
+| RGB888 | `DISPLAY_OUT_FORMAT_24BITS_RGB888` | 24-bit parallel |
+| RGB666 | `DISPLAY_OUT_FORMAT_18BITS_RGB666` | 18-bit parallel |
+| RGB565 | `DISPLAY_OUT_FORMAT_16BITS_RGB565` | 16-bit parallel |
+| Serial | `DISPLAY_OUT_FORMAT_8BITS_SERIAL` | Serial output |
+
+### Configuration overview
+
+`display_cfg_t` is defined in `r_display_api.h`:
+
+```c
+typedef struct st_display_cfg
+{
+    display_input_cfg_t  input[2];      /* Layer 1 and Layer 2 frame buffer settings */
+    display_output_cfg_t output;        /* Horizontal/vertical timing, output format */
+    display_layer_t      layer[2];      /* Layer position, fade, and background color */
+    uint8_t              line_detect_ipl;
+    uint8_t              underflow_1_ipl;
+    uint8_t              underflow_2_ipl;
+    IRQn_Type            line_detect_irq;
+    IRQn_Type            underflow_1_irq;
+    IRQn_Type            underflow_2_irq;
+    void (* p_callback)(display_callback_args_t * p_args);
+    void       * p_context;
+    void const * p_extend;              /* GLCDC-specific extension */
+} display_cfg_t;
+```
+
+Each `display_input_cfg_t` specifies the frame buffer pointer, pixel dimensions, stride, and pixel format:
+
+```c
+typedef struct st_display_input_cfg
+{
+    uint32_t          * p_base;                 /* Frame buffer base address */
+    uint16_t            hsize;                  /* Horizontal pixel count */
+    uint16_t            vsize;                  /* Vertical line count */
+    uint32_t            hstride;                /* Bytes per line (including padding) */
+    display_in_format_t format;                 /* Pixel format */
+    bool                line_descending_enable; /* Flip image vertically */
+    bool                lines_repeat_enable;    /* Repeat scan lines */
+    uint16_t            lines_repeat_times;     /* Number of line repeats */
+} display_input_cfg_t;
+```
+
+### Basic GLCDC initialization
+
+```c
+#include "r_glcdc.h"
+
+/* Frame buffers – place in on-chip SRAM or external SDRAM */
+static uint16_t fb_layer1[480 * 272]  BSP_ALIGN_VARIABLE(64);
+static uint16_t fb_layer2[480 * 272]  BSP_ALIGN_VARIABLE(64);
+
+void glcdc_example(void)
+{
+    fsp_err_t err;
+
+    /* Open GLCDC with the FSP-generated configuration */
+    err = R_GLCDC_Open(&g_display0_ctrl, &g_display0_cfg);
+    assert(FSP_SUCCESS == err);
+
+    /* Start generating sync signals and pixel output */
+    err = R_GLCDC_Start(&g_display0_ctrl);
+    assert(FSP_SUCCESS == err);
+
+    /* Draw to fb_layer1 – changes appear on next frame */
+    fb_layer1[0] = 0xF800U; /* Red pixel at (0,0) in RGB565 */
+
+    /* Swap frame buffer pointer at vsync to avoid tearing */
+    err = R_GLCDC_BufferChange(&g_display0_ctrl,
+                                (uint8_t *) fb_layer1,
+                                DISPLAY_FRAME_LAYER_1);
+    assert(FSP_SUCCESS == err);
+}
+```
+
+### Callback events
+
+| Event | Description |
+|---|---|
+| `DISPLAY_EVENT_LINE_DETECTION` | Configurable scan-line interrupt (use for frame sync) |
+| `DISPLAY_EVENT_FRAME_END` | Frame output complete |
+| `DISPLAY_EVENT_GR1_UNDERFLOW` | Layer 1 frame buffer read underflowed |
+| `DISPLAY_EVENT_GR2_UNDERFLOW` | Layer 2 frame buffer read underflowed |
+
+<Tip>
+Use `DISPLAY_EVENT_LINE_DETECTION` triggered at the last active line to update the frame buffer pointer before the next frame begins. This is the standard technique for tear-free double buffering.
+</Tip>
+
+  </Tab>
+  <Tab title="D/AVE 2D (DRW)">
+
+## D/AVE 2D hardware accelerator (r_drw)
+
+The D/AVE 2D (branded as DRW in FSP) is a TES GmbH 2D GPU integrated into RA6M3 and RA8-series devices. It accelerates:
+
+- Anti-aliased line and polygon rendering
+- Filled and outlined triangles, rectangles, and arcs
+- Texture-mapped quadrilaterals (blit with rotation/scaling)
+- Alpha blending with per-pixel or per-primitive opacity
+- Gradient fills
+
+The `r_drw` module is the FSP port of the D/AVE 2D low-level driver (`dave2d.h`).
+
+### Basic drawing example
+
+```c
+#include "r_drw.h"
+#include "dave2d.h"
+
+extern d2_device * gp_dave2d;  /* Initialized by rm_lvgl_port or application */
+
+void drw_draw_example(void)
+{
+    d2_framebuffer(gp_dave2d,
+                   fb_layer1,
+                   480,           /* stride in pixels */
+                   480, 272,      /* width, height */
+                   d2_mode_rgb565);
+
+    d2_startframe(gp_dave2d);
+
+    /* Draw a filled anti-aliased circle */
+    d2_setcolor(gp_dave2d, 0, 0x001F);   /* Blue in RGB565 */
+    d2_rendercircle(gp_dave2d,
+                    d2_point(240 << 4),  /* X center, 4-bit subpixel */
+                    d2_point(136 << 4),  /* Y center */
+                    d2_radius(50 << 4),  /* Radius */
+                    0);                  /* Fill (0 = filled) */
+
+    d2_endframe(gp_dave2d);
+}
+```
+
+<Note>
+D/AVE 2D uses 4-bit sub-pixel fixed-point coordinates. Multiply integer pixel positions by 16 (`<< 4`) before passing them to D/AVE 2D functions.
+</Note>
+
+  </Tab>
+  <Tab title="JPEG">
+
+## JPEG codec (r_jpeg)
+
+`r_jpeg` uses the on-chip JPEG hardware to encode and decode JPEG images. It supports:
+
+- Baseline JPEG decoding (YCbCr 4:2:0, 4:2:2, 4:4:4)
+- JPEG encoding of raw pixel buffers
+- Output in RGB565, ARGB8888, or YCbCr formats
+- Integration with GLCDC frame buffers via DTC
+
+```c
+#include "r_jpeg.h"
+
+static volatile bool g_jpeg_done = false;
+
+void jpeg_callback(jpeg_callback_args_t * p_args)
+{
+    if (JPEG_EVENT_IMAGE_OUTPUT == p_args->event)
+    {
+        g_jpeg_done = true;
+    }
+}
+
+void jpeg_decode_example(const uint8_t * p_jpeg_data,
+                          uint32_t        jpeg_size,
+                          uint16_t      * p_output_buf)
+{
+    R_JPEG_Open(&g_jpeg0_ctrl, &g_jpeg0_cfg);
+
+    /* Set the JPEG input data */
+    R_JPEG_InputBufferSet(&g_jpeg0_ctrl, p_jpeg_data, jpeg_size);
+
+    /* Set the output buffer for decoded pixels (RGB565) */
+    R_JPEG_OutputBufferSet(&g_jpeg0_ctrl, p_output_buf, 480U * 272U * 2U);
+
+    /* Wait for decode to complete via callback */
+    while (!g_jpeg_done) { }
+
+    R_JPEG_Close(&g_jpeg0_ctrl);
+}
+```
+
+  </Tab>
+  <Tab title="MIPI / CEU / VIN">
+
+## MIPI Display Serial Interface (r_mipi_dsi)
+
+`r_mipi_dsi` drives high-resolution panels over a differential MIPI D-PHY link. It supports:
+- Up to 4 data lanes
+- Video mode and command mode operation
+- DCS (Display Command Set) command transmission
+- Compatible with most modern smartphone-class display panels
+
+MIPI DSI is available on **RA8D1** (2-lane) and **RA8M1** (4-lane).
+
+```c
+#include "r_mipi_dsi.h"
+
+/* Send a DCS command to initialize the display panel */
+mipi_dsi_cmd_t init_cmd =
+{
+    .cmd_id    = MIPI_DSI_CMD_ID_DCS_LONG_WRITE,
+    .flags     = MIPI_DSI_CMD_FLAG_LOW_POWER,
+    .tx_len    = sizeof(panel_init_seq),
+    .p_tx_data = panel_init_seq,
+};
+
+R_MIPI_DSI_Command(&g_mipi_dsi0_ctrl, &init_cmd);
+```
+
+## MIPI Camera Serial Interface (r_mipi_csi)
+
+`r_mipi_csi` receives image data from MIPI CSI-2 image sensors. It captures raw Bayer, YUV, or RGB frame data into a DMA-managed buffer, then optionally passes it to a display layer or image processing pipeline.
+
+Available on **RA8D1**.
+
+## Capture Engine Unit (r_ceu)
+
+`r_ceu` captures parallel camera data (8-bit or 16-bit bus) from sensors using a traditional parallel interface rather than MIPI. It is available on **RA6M3**.
+
+## Video Input (r_vin)
+
+`r_vin` captures analog or digital video (BT.601/BT.656) on **RA8D1**. It supports field-level capture and can feed directly into the GLCDC display pipeline.
+
+  </Tab>
+  <Tab title="UI middleware">
+
+## Graphics middleware
+
+FSP provides port modules for three production-grade UI frameworks. All ports integrate with GLCDC for display output and optionally with D/AVE 2D for hardware-accelerated rendering.
+
+### LVGL (rm_lvgl_port)
+
+[LVGL](https://lvgl.io) is an open-source embedded graphics library with a large widget set, animation engine, and flexible theming.
+
+```c
+#include "rm_lvgl_port.h"
+#include "lvgl.h"
+
+void lvgl_example(void)
+{
+    /* Initialize the FSP LVGL port (opens GLCDC and D/AVE 2D internally) */
+    rm_lvgl_port_init();
+
+    /* Create a label widget */
+    lv_obj_t * label = lv_label_create(lv_scr_act());
+    lv_label_set_text(label, "Hello, FSP!");
+    lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
+
+    /* Call lv_timer_handler() periodically (e.g., every 5 ms) */
+    while (1)
+    {
+        lv_timer_handler();
+        R_BSP_SoftwareDelay(5U, BSP_DELAY_UNITS_MILLISECONDS);
+    }
+}
+```
+
+### Azure RTOS GUIX (rm_guix_port)
+
+Azure RTOS GUIX provides a commercial-grade UI framework with a drag-and-drop Studio IDE for screen design. `rm_guix_port` maps GUIX display driver calls to GLCDC and D/AVE 2D.
+
+### SEGGER emWin (rm_emwin_port)
+
+SEGGER emWin is a mature, certified UI library available royalty-free on Renesas RA devices. `rm_emwin_port` provides the display driver and touch input integration.
+
+### Middleware compatibility matrix
+
+| Device | GLCDC | D/AVE 2D | JPEG | MIPI DSI | LVGL | GUIX | emWin |
+|---|---|---|---|---|---|---|---|
+| RA6M3 | Yes | Yes | Yes | No | Yes | Yes | Yes |
+| RA8D1 | Yes | Yes | Yes | Yes (2-lane) | Yes | Yes | Yes |
+| RA8M1 | Yes | Yes | Yes | Yes (4-lane) | Yes | Yes | Yes |
+| RA4M1, RA2L1 | No | No | No | No | Software only | No | No |
+
+<Tip>
+LVGL can run on any RA device without hardware graphics support by using a software renderer. For devices without GLCDC, configure LVGL to write directly to an SPI display driver such as ST7789 or ILI9341 via `r_sci_spi` or `r_spi`.
+</Tip>
+
+  </Tab>
+</Tabs>

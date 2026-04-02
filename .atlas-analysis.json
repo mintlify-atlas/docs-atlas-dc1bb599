@@ -1,0 +1,125 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "Renesas FSP",
+  "projectDescription": "Flexible Software Package (FSP) for the Renesas RA MCU family, providing HAL drivers, middleware stacks, RTOS integration, and security modules for embedded development.",
+  "theme": "aspen",
+  "primaryColor": "#003087",
+  "lightColor": "#0050C8",
+  "darkColor": "#001A4F",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "supported-hardware"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/bsp",
+              "concepts/hal-drivers",
+              "concepts/middleware"
+            ]
+          },
+          {
+            "group": "Peripheral Drivers",
+            "pages": [
+              "drivers/communication",
+              "drivers/analog",
+              "drivers/timers",
+              "drivers/storage",
+              "drivers/graphics"
+            ]
+          },
+          {
+            "group": "Middleware & RTOS",
+            "pages": [
+              "middleware/rtos-integration",
+              "middleware/networking",
+              "middleware/security",
+              "middleware/motor-control"
+            ]
+          },
+          {
+            "group": "Development Guide",
+            "pages": [
+              "guides/project-setup",
+              "guides/configurator",
+              "guides/trustzone",
+              "guides/contributing"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Common APIs",
+            "pages": [
+              "api/common",
+              "api/bsp"
+            ]
+          },
+          {
+            "group": "Peripheral Interfaces",
+            "pages": [
+              "api/uart",
+              "api/spi",
+              "api/i2c",
+              "api/adc",
+              "api/timer",
+              "api/flash"
+            ]
+          },
+          {
+            "group": "Middleware Interfaces",
+            "pages": [
+              "api/networking",
+              "api/security",
+              "api/motor",
+              "api/storage"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Production-ready HAL drivers for 40+ Renesas RA MCU variants",
+    "RTOS integration with FreeRTOS and Eclipse ThreadX (Azure RTOS)",
+    "Comprehensive connectivity drivers: UART, SPI, I2C, I3C, CAN FD, USB, Ethernet, BLE",
+    "Hardware-accelerated security via RSIP/SCE crypto engines and TrustZone support",
+    "Motor control middleware for vector control, sensorless, and encoder-based systems",
+    "IoT middleware including AWS IoT, Azure EWF, MQTT, and LwIP/NetX networking stacks",
+    "Intuitive e² studio IDE integration with visual configurator (RASC) and code generation",
+    "AI/ML support via ARM Ethos-U NPU driver and TensorFlow Lite Micro integration"
+  ],
+  "publicApiSurface": [
+    "r_uart_api.h — UART interface (open/close/read/write/baud change)",
+    "r_spi_api.h — SPI master/slave interface",
+    "r_i2c_master_api.h / r_i2c_slave_api.h — I2C master and slave interfaces",
+    "r_adc_api.h — Analog-to-digital converter interface",
+    "r_timer_api.h — General-purpose timer interface (GPT/AGT)",
+    "r_flash_api.h — Internal flash read/write/erase interface",
+    "r_cgc_api.h — Clock generation and control interface",
+    "r_ioport_api.h — GPIO port configuration and control",
+    "r_elc_api.h — Event Link Controller interface",
+    "r_lpm_api.h — Low power mode control interface",
+    "r_ether_api.h — Ethernet MAC driver interface",
+    "r_usb_basic_api.h — USB host/device driver interface",
+    "r_flash_api.h — Flash HP/LP driver interface",
+    "rm_wifi_api.h — WiFi module abstraction interface",
+    "rm_motor_api.h — Motor control interface",
+    "rm_ble_abs_api.h — BLE abstraction interface",
+    "fsp_common_api.h — Common error codes and FSP version macros",
+    "bsp_api.h — Board support package (BSP) core API"
+  ]
+}

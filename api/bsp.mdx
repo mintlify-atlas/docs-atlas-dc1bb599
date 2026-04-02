@@ -1,0 +1,191 @@
+---
+title: "BSP API"
+description: "Board Support Package initialization, supported MCU families, and BSP macros for the Renesas RA family."
+---
+
+## Overview
+
+The Board Support Package (BSP) is the lowest software layer in FSP. It abstracts MCU-specific hardware setup so that middleware and application code can target the `bsp_api.h` interface without knowing which specific RA device is in use.
+
+`bsp_api.h` is the top-level include for all BSP functionality. Every FSP module header includes it transitively via `fsp_common_api.h`.
+
+```c
+#include "bsp_api.h"
+```
+
+<Note>
+  You rarely need to include `bsp_api.h` directly. Any FSP driver header (e.g., `r_uart_api.h`) already pulls it in.
+</Note>
+
+---
+
+## BSP Role in the FSP Stack
+
+```
+┌─────────────────────────┐
+│   Application Layer      │
+├─────────────────────────┤
+│   Middleware / Stacks    │  (LwIP, FreeRTOS, LittleFS, …)
+├─────────────────────────┤
+│   FSP HAL Drivers        │  (r_sci_uart, r_spi, r_iic_master, …)
+├─────────────────────────┤
+│   BSP API  ← bsp_api.h  │  Clocks, IRQ, I/O, security, delays
+├─────────────────────────┤
+│   CMSIS Device Files     │  renesas.h, system.h
+└─────────────────────────┘
+         RA MCU Hardware
+```
+
+The BSP provides:
+
+- **Clock configuration** — `bsp_clocks.h` initialises system, peripheral, and external clocks at startup.
+- **IRQ management** — `bsp_irq.h` enables/disables interrupts and manages the vector table.
+- **I/O port access** — `bsp_io.h` configures pin multiplexing and drive strength.
+- **Register protection** — `bsp_register_protection.h` provides write-protect unlock/lock helpers.
+- **Module stop** — `bsp_module_stop.h` enables/disables peripheral clock gating.
+- **Security** — `bsp_security.h` handles TrustZone SAU/IDAU configuration.
+- **Delay** — `bsp_delay.h` provides `R_BSP_SoftwareDelay()`.
+
+---
+
+## BSP Startup Sequence
+
+The BSP startup is transparent to application code. The startup flow for a typical RA project is:
+
+1. **Reset vector** — execution begins at `Reset_Handler` (in `startup.c` / CMSIS startup).
+2. **Low-level init** — stack pointer set, `.bss` zeroed, `.data` copied from flash to RAM.
+3. **`SystemInit()`** — CMSIS hook, disables watchdog, sets up cache on devices that have it.
+4. **`bsp_clock_init()`** — configures the MCU clock tree per `bsp_cfg.h`.
+5. **`bsp_security_init()`** — sets up SAU regions and TrustZone configuration (RA6/RA8 with TrustZone only).
+6. **`main()`** — application entry point.
+
+HAL drivers are not opened by the BSP. Your application calls each driver's `open()` function.
+
+---
+
+## Supported MCU Families
+
+FSP 6.4.0 includes BSP support for the following RA MCU families:
+
+### RA0 Series — Entry-level, ultra-low-power
+
+| BSP directory | Description |
+|---|---|
+| `ra0e1` | RA0E1 — 48 MHz Cortex-M23, low-power entry |
+| `ra0e2` | RA0E2 |
+| `ra0e3` | RA0E3 |
+| `ra0l1` | RA0L1 |
+
+### RA2 Series — Entry-level with enhanced peripherals
+
+| BSP directory | Description |
+|---|---|
+| `ra2a1` | RA2A1 — 48 MHz Cortex-M23, 24-bit ΣΔ ADC |
+| `ra2a2` | RA2A2 |
+| `ra2e1` | RA2E1 |
+| `ra2e2` | RA2E2 |
+| `ra2e3` | RA2E3 |
+| `ra2l1` | RA2L1 |
+| `ra2l2` | RA2L2 |
+| `ra2t1` | RA2T1 — motor control entry |
+
+### RA4 Series — Mid-range, Cortex-M33
+
+| BSP directory | Description |
+|---|---|
+| `ra4c1` | RA4C1 |
+| `ra4e1` | RA4E1 — 200 MHz Cortex-M33 |
+| `ra4e2` | RA4E2 |
+| `ra4l1` | RA4L1 |
+| `ra4m1` | RA4M1 — 48 MHz Cortex-M4 |
+| `ra4m2` | RA4M2 — 200 MHz Cortex-M33 |
+| `ra4m3` | RA4M3 |
+| `ra4t1` | RA4T1 — motor control |
+| `ra4w1` | RA4W1 — integrated BLE |
+
+### RA6 Series — High-performance, Cortex-M4/M33
+
+| BSP directory | Description |
+|---|---|
+| `ra6e1` | RA6E1 — 200 MHz Cortex-M4 |
+| `ra6e2` | RA6E2 |
+| `ra6m1` | RA6M1 — 120 MHz Cortex-M4 |
+| `ra6m2` | RA6M2 — 120 MHz Cortex-M4 |
+| `ra6m3` | RA6M3 — 120 MHz Cortex-M4, TFT/USB HS |
+| `ra6m4` | RA6M4 — 200 MHz Cortex-M33 with TrustZone |
+| `ra6m5` | RA6M5 — 200 MHz Cortex-M33, dual-bank flash |
+| `ra6t1` | RA6T1 — motor control |
+| `ra6t2` | RA6T2 — motor control |
+| `ra6t3` | RA6T3 — motor control |
+
+### RA8 Series — High-end, Cortex-M85
+
+| BSP directory | Description |
+|---|---|
+| `ra8d1` | RA8D1 — 480 MHz Cortex-M85, SDRAM, graphics |
+| `ra8d2` | RA8D2 |
+| `ra8e1` | RA8E1 |
+| `ra8e2` | RA8E2 |
+| `ra8m1` | RA8M1 — 480 MHz Cortex-M85 |
+| `ra8m2` | RA8M2 |
+| `ra8p1` | RA8P1 |
+| `ra8t1` | RA8T1 — motor control |
+| `ra8t2` | RA8T2 — motor control |
+
+---
+
+## Key BSP Functions
+
+### `R_FSP_VersionGet`
+
+Declared in `bsp_api.h`. Returns the current FSP pack version at runtime.
+
+```c
+fsp_err_t R_FSP_VersionGet(fsp_pack_version_t * const p_version);
+```
+
+**Parameters:**
+
+<ParamField path="p_version" type="fsp_pack_version_t *" required>
+  Pointer to a version structure that will be populated with the current FSP version.
+</ParamField>
+
+**Returns:** `FSP_SUCCESS` always.
+
+**Example:**
+
+```c
+fsp_pack_version_t ver;
+R_FSP_VersionGet(&ver);
+// ver.version_id_b.major == 6
+// ver.version_id_b.minor == 4
+```
+
+### `R_BSP_SoftwareDelay`
+
+Provides a blocking software delay using the CPU cycle counter. Declared in `bsp_delay.h`.
+
+```c
+void R_BSP_SoftwareDelay(uint32_t delay, bsp_delay_units_t units);
+```
+
+| `units` value | Description |
+|---|---|
+| `BSP_DELAY_UNITS_SECONDS` | Delay in seconds |
+| `BSP_DELAY_UNITS_MILLISECONDS` | Delay in milliseconds |
+| `BSP_DELAY_UNITS_MICROSECONDS` | Delay in microseconds |
+
+---
+
+## `bsp_cfg.h` Configuration
+
+`bsp_cfg.h` is generated by the Renesas Smart Configurator (e2 studio / RASC) and controls:
+
+- **System clock source** — HOCO, MOCO, MOSC, PLL
+- **Clock frequencies** — ICLK, PCLKA/B/C/D, FCLK, BCLK
+- **Stack / heap sizes** — `BSP_CFG_STACK_MAIN_BYTES`, `BSP_CFG_HEAP_BYTES`
+- **Error handler** — `BSP_CFG_ERROR_HANDLER` (assertion behaviour)
+
+<Tip>
+  The Smart Configurator generates all `bsp_cfg.h` values automatically when you select an MCU and configure the clock tree in the graphical tool. Manual editing is generally not required.
+</Tip>

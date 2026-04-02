@@ -1,0 +1,125 @@
+---
+title: "RA Smart Configurator (RASC)"
+description: "Use the RA Smart Configurator to visually configure peripherals, assign pins, build middleware stacks, and generate FSP initialization code."
+keywords: ["RASC", "RA Smart Configurator", "pin configuration", "stack", "code generation", "ra_gen"]
+---
+
+## What RASC does
+
+The RA Smart Configurator (RASC) is the graphical configuration tool for FSP projects. It handles:
+
+- **Peripheral configuration** — Set operating modes, clock sources, interrupt priorities, and driver settings for each peripheral through a visual interface.
+- **Pin assignment** — Map peripheral signals to physical MCU pins and detect conflicts.
+- **Stack configuration** — Compose your application's driver and middleware stack by selecting modules and configuring their properties.
+- **Code generation** — Produce ready-to-compile C source and header files that initialize all configured hardware.
+
+RASC is available as an integrated view inside e² studio and as a standalone application for use with IAR Embedded Workbench or Keil MDK.
+
+## RASC workflow
+
+<Steps>
+  <Step title="Open the configurator">
+    In e² studio, double-click the `configuration.xml` file in your project root. This opens the RASC perspective. If you are using standalone RASC, launch the application and open your project's `configuration.xml`.
+  </Step>
+  <Step title="Configure the BSP">
+    Select the **BSP** tab to review and adjust board support package settings: MCU variant, operating frequency, stack and heap sizes, and linker script options.
+  </Step>
+  <Step title="Assign pins">
+    Select the **Pins** tab. For each peripheral you plan to use, expand its entry and assign signals to the required MCU pins. RASC highlights conflicts where two signals are mapped to the same pin.
+  </Step>
+  <Step title="Add modules on the Stacks tab">
+    Select the **Stacks** tab. This is where you build your driver stack:
+
+    1. Click **New Stack** or **Add module** to browse available FSP modules.
+    2. Select a module (for example, `r_uart9`) to add it to the stack.
+    3. RASC automatically adds required dependencies. For example, adding a UART module with DTC transfer support will prompt you to add the `r_dtc` Transfer module.
+    4. Configure each module's properties in the **Properties** panel on the right. Properties include instance names, interrupt callbacks, and hardware resource assignments.
+  </Step>
+  <Step title="Resolve module dependencies">
+    When a module requires another module that is not yet in your stack, RASC shows a dependency warning. Click the warning or use the **Add** button in the dependency list to include the required module.
+
+    For example:
+    - A UART module with DMA/DTC enabled depends on a **Transfer (r_dtc)** or **Transfer (r_dmac)** module.
+    - A networking middleware module depends on a hardware abstraction layer (HAL) Ethernet driver.
+  </Step>
+  <Step title="Generate code">
+    Click the **Generate Project Content** button (the gear icon in the RASC toolbar, or **Project > Generate Project Content** in e² studio). RASC writes all generated files to the `ra_gen/` folder in your project.
+  </Step>
+</Steps>
+
+## Generated files
+
+After code generation, RASC populates the `ra_gen/` folder with the following files:
+
+| File | Purpose |
+|------|---------|
+| `common_data.c` / `common_data.h` | Shared data structures and transfer descriptors used across modules. |
+| `hal_data.c` / `hal_data.h` | Configuration structures and instance objects for all HAL drivers in your stack. Declares `extern` handles used in application code. |
+| `pin_data.c` | Pin multiplexer (PmnPFS register) configuration table generated from your pin assignments. |
+| `vector_data.c` / `vector_data.h` | Interrupt vector table entries for all enabled peripheral interrupts. |
+
+A typical `ra_gen/` structure:
+
+```text
+ra_gen/
+├── common_data.c
+├── common_data.h
+├── hal_data.c
+├── hal_data.h
+├── pin_data.c
+├── vector_data.c
+└── vector_data.h
+```
+
+To use a configured driver in application code, include `hal_data.h` and reference the generated instance handle. For example, for a UART instance named `g_uart0`:
+
+```c
+#include "hal_data.h"
+
+void my_app_init(void)
+{
+    /* Open the UART driver using the generated configuration structure */
+    R_UART9_Open(&g_uart0_ctrl, &g_uart0_cfg);
+}
+```
+
+<Note>
+  Never manually edit files inside `ra_gen/`. These files are fully regenerated every time you click **Generate Project Content** in RASC, and any manual changes will be overwritten. Place all application logic in your own source files outside `ra_gen/`.
+</Note>
+
+## Configuration structures
+
+RASC generates a configuration structure for each module instance. The structure type is defined by the FSP driver and the generated constant is named using the instance name you set in RASC.
+
+For a UART instance named `g_uart0`, RASC generates:
+
+```c
+/* In hal_data.h */
+extern uart_instance_t g_uart0;
+extern uart_ctrl_t g_uart0_ctrl;
+extern const uart_cfg_t g_uart0_cfg;
+```
+
+The `uart_cfg_t` structure contains all settings you configured in RASC — baud rate, data bits, stop bits, interrupt callbacks, and DTC transfer configurations — compiled into read-only flash.
+
+## e² studio integration vs. standalone RASC
+
+| Feature | e² studio (integrated) | Standalone RASC |
+|---------|----------------------|-----------------|
+| Toolchain | GCC, LLVM | IAR, Keil MDK |
+| Launch method | Open `configuration.xml` in e² studio | Launch RASC application separately |
+| Build and debug | Unified in e² studio | Build and debug in IAR or Keil MDK |
+| Code generation | Same output, same `ra_gen/` structure | Same output, same `ra_gen/` structure |
+
+Both modes use the same FSP packs and produce identical `ra_gen/` output.
+
+## Next steps
+
+<Columns cols={2}>
+  <Card title="Project setup" icon="folder-open" href="/guides/project-setup">
+    Install FSP packs and create a new project.
+  </Card>
+  <Card title="TrustZone development" icon="shield" href="/guides/trustzone">
+    Configure Secure and Non-Secure partitions on Cortex-M33 RA MCUs.
+  </Card>
+</Columns>

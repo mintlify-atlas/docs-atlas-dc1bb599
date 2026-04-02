@@ -1,0 +1,277 @@
+---
+title: 'Motor Control'
+description: 'Field oriented control, 120-degree conduction, and advanced motor middleware for PMSM and BLDC motors using FSP on RA MCUs.'
+keywords: ['FOC', 'motor control', 'PMSM', 'BLDC', 'rm_motor_sensorless', 'rm_motor_encoder', 'rm_motor_hall', 'rm_motor_120_degree', 'GPT', 'ADC']
+---
+
+FSP includes a comprehensive motor control middleware stack covering field oriented control (FOC) for PMSM and BLDC motors, 120-degree conduction control, and an advanced high-level motor control framework. The stack is layered so application code works through a single `motor_api_t` interface regardless of the underlying control algorithm or sense method.
+
+## Motor control stack
+
+```
+┌─────────────────────────────────────────────────────┐
+│                   Application                       │
+│  motor_api_t: open / run / stop / speedSet /        │
+│               angleGet / speedGet / errorCheck      │
+├───────────────┬─────────────────────────────────────┤
+│  rm_motor_*   │  Vector control (FOC)               │
+│  (top-level)  │  rm_motor_sensorless                │
+│               │  rm_motor_encoder                   │
+│               │  rm_motor_hall                      │
+│               │  rm_motor_induction                 │
+│               │  rm_motor_120_degree                │
+├───────────────┼─────────────────────────────────────┤
+│  Speed /      │  rm_motor_speed   (speed loop PI)   │
+│  Current /    │  rm_motor_current (current loop PI) │
+│  Position     │  rm_motor_position (position loop)  │
+├───────────────┼─────────────────────────────────────┤
+│  Sense        │  rm_motor_sense_encoder             │
+│               │  rm_motor_sense_hall                │
+│               │  rm_motor_sense_induction           │
+│               │  rm_motor_estimate (sensorless)     │
+├───────────────┼─────────────────────────────────────┤
+│  Driver       │  rm_motor_driver  (FOC ADC + PWM)   │
+│               │  rm_motor_120_driver                │
+├───────────────┼─────────────────────────────────────┤
+│  HAL          │  r_gpt (three-phase PWM)            │
+│               │  r_adc / r_adc_b (current sensing)  │
+└───────────────┴─────────────────────────────────────┘
+```
+
+The `motor_api_t` structure (`rm_motor_api.h`) defines the interface that every top-level motor module implements:
+
+```c
+/** Functions implemented at the HAL layer will follow this API. */
+typedef struct st_motor_api
+{
+    fsp_err_t (* open)(motor_ctrl_t * const p_ctrl, motor_cfg_t const * const p_cfg);
+    fsp_err_t (* close)(motor_ctrl_t * const p_ctrl);
+    fsp_err_t (* run)(motor_ctrl_t * const p_ctrl);
+    fsp_err_t (* stop)(motor_ctrl_t * const p_ctrl);
+    fsp_err_t (* reset)(motor_ctrl_t * const p_ctrl);
+    fsp_err_t (* errorSet)(motor_ctrl_t * const p_ctrl, motor_error_t const error);
+    fsp_err_t (* speedSet)(motor_ctrl_t * const p_ctrl, float const speed_rpm);
+    fsp_err_t (* positionSet)(motor_ctrl_t * const p_ctrl,
+                              motor_speed_position_data_t const * const p_position);
+    fsp_err_t (* statusGet)(motor_ctrl_t * const p_ctrl, uint8_t * const p_status);
+    fsp_err_t (* angleGet)(motor_ctrl_t * const p_ctrl, float * const p_angle_rad);
+    fsp_err_t (* speedGet)(motor_ctrl_t * const p_ctrl, float * const p_speed_rpm);
+    fsp_err_t (* waitStopFlagGet)(motor_ctrl_t * const p_ctrl,
+                                  motor_wait_stop_flag_t * const p_flag);
+    fsp_err_t (* errorCheck)(motor_ctrl_t * const p_ctrl, uint16_t * const p_error);
+    fsp_err_t (* functionSelect)(motor_ctrl_t * const p_ctrl,
+                                 motor_function_select_t const function);
+} motor_api_t;
+```
+
+## Supported motor types
+
+| Motor type | Abbreviation | Applicable modules |
+|-----------|-------------|-------------------|
+| Permanent Magnet Synchronous Motor | PMSM | `rm_motor_sensorless`, `rm_motor_encoder`, `rm_motor_hall`, `rm_motor_induction`, all advanced FOC modules |
+| Brushless DC Motor | BLDC | `rm_motor_120_degree`, `rm_motor_120_control_sensorless`, `rm_motor_120_control_hall` |
+
+## FOC (field oriented control)
+
+FOC decouples the torque-producing and flux-producing current components (d-axis and q-axis) for precise, efficient speed and torque control. FSP provides three sense variants.
+
+<Tabs>
+  <Tab title="Sensorless (rm_motor_sensorless)">
+    Uses back-EMF estimation (`rm_motor_estimate`) to calculate rotor angle and speed without a physical position sensor. Suitable for PMSM in applications where adding an encoder or hall sensors is impractical.
+
+    **Limitations:** Requires minimum speed for reliable back-EMF detection; start-up uses open-loop forced commutation.
+
+    ```c
+    #include "rm_motor_sensorless.h"
+    #include "hal_data.h"   /* RASC-generated: g_motor0, g_motor0_ctrl, g_motor0_cfg */
+
+    void motor_sensorless_example(void)
+    {
+        /* Open the motor driver stack */
+        fsp_err_t err = g_motor0.p_api->open(g_motor0.p_ctrl, g_motor0.p_cfg);
+        FSP_ERROR_RETURN(FSP_SUCCESS == err, /* handle error */);
+
+        /* Set target speed and start rotation */
+        g_motor0.p_api->speedSet(g_motor0.p_ctrl, 1500.0f); /* 1500 rpm */
+        g_motor0.p_api->run(g_motor0.p_ctrl);
+
+        /* Read back actual speed */
+        float actual_rpm = 0.0f;
+        g_motor0.p_api->speedGet(g_motor0.p_ctrl, &actual_rpm);
+
+        /* Check for faults */
+        uint16_t error_flags = 0U;
+        g_motor0.p_api->errorCheck(g_motor0.p_ctrl, &error_flags);
+        if (error_flags != MOTOR_ERROR_NONE)
+        {
+            g_motor0.p_api->stop(g_motor0.p_ctrl);
+            g_motor0.p_api->reset(g_motor0.p_ctrl);
+        }
+    }
+    ```
+  </Tab>
+  <Tab title="Encoder (rm_motor_encoder)">
+    Uses an incremental encoder (`rm_motor_sense_encoder`) for accurate absolute rotor angle and speed measurement. Provides superior low-speed performance and accurate position control compared to sensorless.
+
+    The encoder sense module counts A/B phase pulses using the GPT capture compare unit and calculates mechanical angle from the configured encoder resolution (pulses per revolution).
+
+    ```c
+    #include "rm_motor_encoder.h"
+
+    void motor_encoder_example(void)
+    {
+        /* Stack: rm_motor_encoder → rm_motor_speed → rm_motor_current
+         *      → rm_motor_sense_encoder → rm_motor_driver → r_gpt + r_adc */
+        fsp_err_t err = g_motor0.p_api->open(g_motor0.p_ctrl, g_motor0.p_cfg);
+        FSP_ERROR_RETURN(FSP_SUCCESS == err, /* handle error */);
+
+        /* Position control example */
+        motor_speed_position_data_t pos =
+        {
+            .position_reference_rad = 3.14159f, /* target: π radians */
+        };
+        g_motor0.p_api->positionSet(g_motor0.p_ctrl, &pos);
+        g_motor0.p_api->run(g_motor0.p_ctrl);
+    }
+    ```
+  </Tab>
+  <Tab title="Hall sensors (rm_motor_hall)">
+    Uses three hall-effect sensors (`rm_motor_sense_hall`) for commutation. Hall sensors provide 60° electrical resolution, making them suitable for BLDC motors where full FOC accuracy is not required but sensor feedback is preferred over sensorless.
+
+    ```c
+    #include "rm_motor_hall.h"
+
+    void motor_hall_example(void)
+    {
+        fsp_err_t err = g_motor0.p_api->open(g_motor0.p_ctrl, g_motor0.p_cfg);
+        FSP_ERROR_RETURN(FSP_SUCCESS == err, /* handle error */);
+
+        g_motor0.p_api->speedSet(g_motor0.p_ctrl, 800.0f); /* 800 rpm */
+        g_motor0.p_api->run(g_motor0.p_ctrl);
+    }
+    ```
+  </Tab>
+  <Tab title="Induction sensor (rm_motor_induction)">
+    Uses an induction (resolver-type) sensor (`rm_motor_sense_induction`) for angular position measurement. Suited for harsh environments where optical encoders are impractical.
+
+    ```c
+    #include "rm_motor_induction.h"
+
+    void motor_induction_example(void)
+    {
+        fsp_err_t err = g_motor0.p_api->open(g_motor0.p_ctrl, g_motor0.p_cfg);
+        FSP_ERROR_RETURN(FSP_SUCCESS == err, /* handle error */);
+
+        g_motor0.p_api->speedSet(g_motor0.p_ctrl, 3000.0f);
+        g_motor0.p_api->run(g_motor0.p_ctrl);
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## 120-degree conduction control
+
+For simple BLDC motor applications, 120-degree (trapezoidal) commutation offers lower software complexity than FOC. FSP provides dedicated modules for this control method.
+
+<CardGroup cols={2}>
+  <Card title="rm_motor_120_degree" icon="zap">
+    Top-level 120-degree control module. Manages commutation state machine and calls into the driver layer for PWM and ADC updates.
+  </Card>
+  <Card title="rm_motor_120_control_sensorless" icon="activity">
+    Sensorless 120-degree control using back-EMF zero-crossing detection. No position sensors required.
+  </Card>
+  <Card title="rm_motor_120_control_hall" icon="cpu">
+    120-degree control with hall sensor commutation. Hall sensor transitions directly trigger PWM pattern changes.
+  </Card>
+  <Card title="rm_motor_120_driver" icon="settings">
+    Lower-level driver for 120-degree control: handles ADC triggering, PWM duty cycle updates, and overcurrent detection.
+  </Card>
+</CardGroup>
+
+## Sense modules
+
+Sense modules calculate angle and speed from raw sensor signals and feed the results to the speed and current controllers.
+
+| Module | Sensor | Output |
+|--------|--------|--------|
+| `rm_motor_sense_encoder` | Incremental quadrature encoder | Angle (rad), speed (rpm) |
+| `rm_motor_sense_hall` | Three hall-effect sensors | Commutation sector, speed (rpm) |
+| `rm_motor_sense_induction` | Induction/resolver | Angle (rad), speed (rpm) |
+| `rm_motor_estimate` | None (sensorless) | Estimated angle (rad), estimated speed (rpm) |
+
+BEMF-based variants from the Advanced Motor Middleware category:
+- `rm_motor_sensor_bemf` — back-EMF sense for advanced controller
+- `rm_motor_sensor_hall` — hall sense for advanced controller
+
+## Speed, current, and position control layers
+
+The control loops are separated into independent modules that can be composed as needed.
+
+### rm_motor_speed — speed controller
+
+Implements a PI speed regulator. Takes the speed reference (rpm) and measured speed as inputs, outputs a q-axis current reference (`Iq_ref`) to the current controller.
+
+### rm_motor_current — current controller
+
+Implements PI regulators for the d-axis and q-axis currents in the rotating reference frame. Outputs d-axis and q-axis voltage references (`Vd`, `Vq`) which are transformed by space vector modulation (SVM) to three-phase PWM duty cycles.
+
+### rm_motor_position — position controller
+
+Wraps the speed controller with an outer position loop PI regulator. Converts a position reference (radians) to a speed reference (rpm).
+
+## Error detection
+
+The `motor_error_t` enumeration covers the full set of hardware and algorithm faults detectable by FSP motor middleware:
+
+```c
+typedef enum e_rm_motor_error
+{
+    MOTOR_ERROR_NONE                     = 0x0000,
+    MOTOR_ERROR_OVER_CURRENT_HW          = 0x0001, /* Hardware overcurrent detection */
+    MOTOR_ERROR_OVER_VOLTAGE             = 0x0002, /* DC bus overvoltage */
+    MOTOR_ERROR_OVER_SPEED               = 0x0004, /* Speed limit exceeded */
+    MOTOR_ERROR_HALL_TIMEOUT             = 0x0008, /* No hall sensor signal received */
+    MOTOR_ERROR_BEMF_TIMEOUT             = 0x0010, /* Back-EMF signal lost */
+    MOTOR_ERROR_HALL_PATTERN             = 0x0020, /* Invalid hall pattern */
+    MOTOR_ERROR_BEMF_PATTERN             = 0x0040, /* Invalid BEMF pattern */
+    MOTOR_ERROR_LOW_VOLTAGE              = 0x0080, /* DC bus undervoltage */
+    MOTOR_ERROR_OVER_CURRENT_SW          = 0x0100, /* Software overcurrent (phase) */
+    MOTOR_ERROR_INDUCTION_CORRECT        = 0x0200, /* Inductance setting error */
+    MOTOR_ERROR_ABNOMAL_OFFSET_VALUE     = 0x0400, /* Current offset out of range */
+    MOTOR_ERROR_PHASE_CONNECTION_FAILURE = 0x0800, /* Phase wiring fault detected */
+    MOTOR_ERROR_DISCONNECTION_DETECTION  = 0x1000, /* Open-circuit detected */
+    MOTOR_ERROR_MTPA_INCORRECT           = 0x2000, /* MTPA parameter error */
+    MOTOR_ERROR_FLUX_WEAKENING           = 0x4000, /* Flux weakening algorithm error */
+    MOTOR_ERROR_UNKNOWN                  = 0xFFFF,
+} motor_error_t;
+```
+
+Multiple error bits can be set simultaneously. Call `errorCheck()` periodically from the application and stop the motor on any non-zero result.
+
+## Advanced motor middleware
+
+The advanced motor middleware provides a higher-level orchestration layer for complex multi-axis or precision applications.
+
+| Module | Description |
+|--------|-------------|
+| `rm_motor_control` | Top-level orchestrator for the advanced FOC stack |
+| `rm_motor_pm_foc` | PM (permanent magnet) FOC algorithm module with MTPA, flux weakening, and anti-vibration features |
+| `rm_motor_hal_driver` | HAL driver abstraction for the advanced stack; supports shared ADC across multiple motor instances |
+| `rm_motor_trajectory_linear` | Linear trajectory planner for smooth acceleration/deceleration profiles |
+| `rm_motor_tuner_pm` | Auto-tuning module for PI gain estimation on PM motors |
+| `rm_motor_inertia_estimate` | Mechanical inertia estimation utility |
+| `rm_motor_return_origin` | Origin-return function for homing sequences |
+
+<Note>
+The advanced motor middleware (`rm_motor_control`, `rm_motor_pm_foc`) requires the `rm_motor_hal_driver` module which abstracts the GPT and ADC peripheral access. This is distinct from the standard `rm_motor_driver` used with the basic FOC modules. Check the RASC module dependency view to confirm correct stack assembly.
+</Note>
+
+## Hardware requirements
+
+Motor control applications on RA devices use:
+
+- **r_gpt** (General PWM Timer) in three-phase mode (`r_gpt_three_phase`) for complementary PWM output with dead-time insertion
+- **r_adc** or **r_adc_b** for phase current sampling, synchronized to PWM carrier via the ELC (Event Link Controller)
+- **r_icu** for hardware overcurrent trip from the motor driver IC's fault pin
+
+The ELC connection between GPT and ADC ensures current is sampled at the exact center of the PWM period (center-aligned sampling), minimising switching noise in the ADC result.

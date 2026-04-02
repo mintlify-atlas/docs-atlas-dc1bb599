@@ -1,0 +1,151 @@
+---
+title: "Storage APIs"
+description: "Block media, LittleFS, Virtual EEPROM, and file system APIs in Renesas FSP."
+---
+
+FSP provides a layered storage API. The block media abstraction (`rm_block_media_api.h`) sits above raw flash/SD drivers and below file system layers like LittleFS and Azure RTOS FileX.
+
+## Block media interface
+
+The `rm_block_media_api_t` interface provides uniform read/write/erase access to physical storage regardless of the underlying medium.
+
+```c
+typedef struct st_rm_block_media_api
+{
+    fsp_err_t (* open)(rm_block_media_ctrl_t * const p_ctrl,
+                       rm_block_media_cfg_t const * const p_cfg);
+    fsp_err_t (* mediaInit)(rm_block_media_ctrl_t * const p_ctrl,
+                            rm_block_media_device_cfg_t * const p_device_cfg);
+    fsp_err_t (* read)(rm_block_media_ctrl_t * const p_ctrl,
+                       uint8_t * const p_dest_address,
+                       uint32_t const block_address,
+                       uint32_t const num_blocks);
+    fsp_err_t (* write)(rm_block_media_ctrl_t * const p_ctrl,
+                        uint8_t const * const p_src_address,
+                        uint32_t const block_address,
+                        uint32_t const num_blocks);
+    fsp_err_t (* erase)(rm_block_media_ctrl_t * const p_ctrl,
+                        uint32_t const block_address,
+                        uint32_t const num_blocks);
+    fsp_err_t (* statusGet)(rm_block_media_ctrl_t * const p_ctrl,
+                            rm_block_media_status_t * const p_status);
+    fsp_err_t (* infoGet)(rm_block_media_ctrl_t * const p_ctrl,
+                          rm_block_media_info_t * const p_info);
+    fsp_err_t (* close)(rm_block_media_ctrl_t * const p_ctrl);
+} rm_block_media_api_t;
+```
+
+Available block media implementations:
+
+| Module | Backing storage |
+|--------|----------------|
+| `rm_block_media_sdmmc` | SD/MMC card via `r_sdhi` |
+| `rm_block_media_spi` | SPI NOR flash via `r_qspi`/`r_ospi` |
+| `rm_block_media_usb` | USB mass storage host |
+| `rm_block_media_ram` | RAM disk (testing/temporary storage) |
+| `rm_block_media_user` | Custom user implementation |
+
+## LittleFS API
+
+The `rm_littlefs_api_t` interface exposes a LittleFS filesystem on top of internal flash.
+
+Add to your RASC stack: `Storage > LittleFS` + `Storage > Flash (r_flash_hp or r_flash_lp)`.
+
+```c littlefs_example.c
+#include "rm_littlefs_flash.h"
+#include "lfs.h"
+
+extern rm_littlefs_instance_t g_rm_littlefs0;
+
+void littlefs_example(void)
+{
+    fsp_err_t fsp_err;
+    int lfs_err;
+
+    /* Open the FSP LittleFS port */
+    fsp_err = g_rm_littlefs0.p_api->open(g_rm_littlefs0.p_ctrl, g_rm_littlefs0.p_cfg);
+    FSP_ERROR_RETURN(FSP_SUCCESS == fsp_err, fsp_err);
+
+    /* Mount filesystem (formats if not already formatted) */
+    lfs_t lfs;
+    lfs_err = lfs_mount(&lfs, g_rm_littlefs0.p_cfg->p_lfs_cfg);
+    if (LFS_ERR_OK != lfs_err)
+    {
+        lfs_format(&lfs, g_rm_littlefs0.p_cfg->p_lfs_cfg);
+        lfs_mount(&lfs, g_rm_littlefs0.p_cfg->p_lfs_cfg);
+    }
+
+    /* Write a file */
+    lfs_file_t file;
+    lfs_file_open(&lfs, &file, "config.txt", LFS_O_WRONLY | LFS_O_CREAT);
+    lfs_file_write(&lfs, &file, "value=42\n", 9);
+    lfs_file_close(&lfs, &file);
+
+    lfs_unmount(&lfs);
+}
+```
+
+## Virtual EEPROM (rm_vee_flash)
+
+The `rm_vee_api_t` interface provides EEPROM-like key-value storage with wear leveling on top of internal data flash.
+
+<ParamField path="p_flash" type="flash_instance_t const *">
+  Flash driver instance to use for backing storage.
+</ParamField>
+
+<ParamField path="start_block" type="uint32_t">
+  Starting flash block number for the VEE data area.
+</ParamField>
+
+<ParamField path="num_blocks" type="uint32_t">
+  Number of flash blocks allocated to VEE storage.
+</ParamField>
+
+```c vee_example.c
+#include "rm_vee_flash.h"
+
+extern rm_vee_instance_t g_vee0;
+
+void vee_example(void)
+{
+    fsp_err_t err;
+
+    err = g_vee0.p_api->open(g_vee0.p_ctrl, g_vee0.p_cfg);
+    FSP_ERROR_RETURN(FSP_SUCCESS == err, err);
+
+    /* Write a record (ID 1, 4 bytes) */
+    uint32_t value = 12345U;
+    err = g_vee0.p_api->recordWrite(g_vee0.p_ctrl, 1U, (uint8_t *)&value, sizeof(value));
+    FSP_ERROR_RETURN(FSP_SUCCESS == err, err);
+
+    /* Read back */
+    uint32_t read_value = 0U;
+    uint32_t length = sizeof(read_value);
+    err = g_vee0.p_api->recordRead(g_vee0.p_ctrl, 1U, &length, (uint8_t *)&read_value);
+    FSP_ERROR_RETURN(FSP_SUCCESS == err, err);
+}
+```
+
+## Flash events (for BGO mode)
+
+When using Background Operation (BGO) mode, flash operations complete asynchronously and results are reported via callback:
+
+| Event | Description |
+|-------|-------------|
+| `FLASH_EVENT_ERASE_COMPLETE` | Erase completed successfully |
+| `FLASH_EVENT_WRITE_COMPLETE` | Write completed successfully |
+| `FLASH_EVENT_BLANK` | Blank check: area is blank |
+| `FLASH_EVENT_NOT_BLANK` | Blank check: area is not blank |
+| `FLASH_EVENT_ERR_DF_ACCESS` | Data flash operation failed |
+| `FLASH_EVENT_ERR_CF_ACCESS` | Code flash operation failed |
+| `FLASH_EVENT_ERR_CMD_LOCKED` | FCU in locked state |
+| `FLASH_EVENT_ERR_FAILURE` | Erase or program failed |
+
+<CardGroup cols={2}>
+  <Card title="Storage Drivers" icon="hard-drive" href="/drivers/storage">
+    Flash, QSPI, OSPI, and SD/MMC driver overview
+  </Card>
+  <Card title="Flash API" icon="database" href="/api/flash">
+    Low-level flash read/write/erase interface
+  </Card>
+</CardGroup>

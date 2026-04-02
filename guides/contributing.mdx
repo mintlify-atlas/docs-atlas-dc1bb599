@@ -1,0 +1,108 @@
+---
+title: "Contributing"
+description: "Report bugs, request features, and contribute code to the Renesas FSP project."
+keywords: ["contributing", "bug report", "pull request", "CLA", "coding standard", "open source"]
+---
+
+## How to contribute
+
+FSP welcomes contributions from the community. You can contribute by reporting bugs, requesting features, or submitting code changes through pull requests.
+
+## Bug reports
+
+Before filing a bug, check whether it is a security vulnerability. Security issues must follow the [vulnerability reporting process](#reporting-security-vulnerabilities) rather than the public issue tracker.
+
+For all other bugs, [create a GitHub issue](https://docs.github.com/en/issues/tracking-your-work-with-issues/creating-an-issue) and include:
+
+- **Expected behavior** — what you expected to happen.
+- **Actual behavior** — what actually happened.
+- **Steps to reproduce** — a minimal, reproducible sequence of steps.
+- **Logs, screenshots, or measurements** — if relevant to the issue.
+
+An FSP maintainer will review the issue and follow up in a comment.
+
+<Note>
+  Check the [existing GitHub issues](https://github.com/renesas/fsp/issues) (including closed issues) before filing a new bug to avoid duplicates. [Critical issues](https://github.com/renesas/fsp/issues?q=label%3Acritical+is%3Aclosed) that cause an MCU to operate outside hardware manual specifications are tagged with the `critical` label — review these before going to production.
+</Note>
+
+## Feature and enhancement requests
+
+Submit feature requests through [GitHub issues](https://docs.github.com/en/issues/tracking-your-work-with-issues/creating-an-issue). The FSP team reviews all requests and may ask follow-up questions.
+
+What happens after you submit:
+
+- If the feature is a good fit for FSP, the team prioritizes and assigns it internally.
+- When work begins, a comment is added to the issue.
+- When the feature ships, the issue is closed with a comment identifying the release version.
+- Requests that are not feasible, not a good fit, or lack sufficient detail will be closed.
+
+If you want to implement a feature requested by someone else and work has not yet started, comment on the issue with your implementation plan before starting. Then follow the [Contributing code](#contributing-code) process.
+
+## Contributing code
+
+### Signing the Contributor License Agreement
+
+All community contributors must sign a **Contributor License Agreement (CLA)** before their pull request can be merged. When you open a pull request, a bot checks whether a CLA is on file for your GitHub account. If not, it will prompt you to sign.
+
+You can verify your CLA status at any time on the [CLA page](https://cla-assistant.io/renesas/fsp).
+
+### Coding standards
+
+All code contributions must comply with the [FSP Coding Standard](https://github.com/renesas/fsp-standards/blob/main/fsp-coding-standard.md). Review the standard before writing code to avoid revision cycles during review.
+
+<Note>
+  The FSP Coding Standard covers naming conventions, file structure, comment style, and safety requirements aligned with MISRA C guidelines. Adhering to it from the start significantly speeds up the review process.
+</Note>
+
+### Pull request process
+
+<Steps>
+  <Step title="Confirm relevance">
+    Make sure the change is relevant to FSP for the Renesas RA MCU Family. Contributions unrelated to FSP or RA MCUs are outside the project's scope.
+  </Step>
+  <Step title="Check for duplicates">
+    Search [GitHub issues](https://github.com/renesas/fsp/issues) (open and closed) to confirm your proposed change is not already addressed or in progress.
+  </Step>
+  <Step title="Create or comment on an issue">
+    [Create a GitHub issue](https://docs.github.com/en/issues/tracking-your-work-with-issues/creating-an-issue) describing the proposed change, or add a comment to an existing issue with your implementation plan.
+
+    The FSP team will review and either approve the plan or suggest changes. For straightforward fixes (such as a one-line bug fix), you may open a pull request directly without waiting for approval.
+  </Step>
+  <Step title="Fork the repository">
+    [Fork the FSP repository](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/fork-a-repo) to your GitHub account and develop your changes on a dedicated branch.
+  </Step>
+  <Step title="Implement your changes">
+    Write your code following the [FSP Coding Standard](https://github.com/renesas/fsp-standards/blob/main/fsp-coding-standard.md). Keep changes focused — one feature or bug fix per pull request.
+  </Step>
+  <Step title="Open a pull request">
+    When development is complete, [create a pull request from your fork](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-a-pull-request-from-a-fork) targeting the FSP repository's main branch.
+  </Step>
+  <Step title="Respond to review">
+    The FSP team reviews the pull request, may ask questions, and performs internal integration testing. When the change is accepted, the team will confirm in a GitHub comment and close the pull request.
+  </Step>
+</Steps>
+
+<Note>
+  If you are contributing multiple independent features or bug fixes, submit a **separate pull request for each item**. Bundling unrelated changes into a single pull request slows down review and may result in the entire PR being held back due to one unresolved item.
+</Note>
+
+## Reporting security vulnerabilities
+
+Security vulnerabilities must **not** be reported through public GitHub issues. Renesas maintains a dedicated security incident portal.
+
+To report a vulnerability:
+
+1. Go to [https://www.renesas.com/support/renesas-psirt](https://www.renesas.com/support/renesas-psirt) for the full security policy and reporting method.
+2. Submit the vulnerability report through the portal described there.
+
+For vulnerabilities in **third-party code** bundled with FSP (such as Eclipse ThreadX or FreeRTOS components), report the issue directly to the respective vendor.
+
+<Warning>
+  Security updates are provided for the **latest public FSP release only**. If you are using an older FSP version, upgrade to the latest release to receive security fixes. Published security advisories are listed at [https://www.renesas.com/support/renesas-psirt#advisories](https://www.renesas.com/support/renesas-psirt#advisories) and tagged in GitHub issues with the `product_security_advisory` label.
+</Warning>
+
+## Technical support
+
+For general questions about Renesas products, tools, or environments that are not code contributions, submit a support ticket at [https://www.renesas.com/support](https://www.renesas.com/us/en/support).
+
+Community discussion is available on the [RA Product Support Forum](https://www.renesas.com/ra/forum).

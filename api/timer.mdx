@@ -1,0 +1,358 @@
+---
+title: "Timer Interface"
+description: "General-purpose timer API for Renesas FSP, covering periodic mode, one-shot mode, PWM output, and input capture."
+---
+
+## Overview
+
+The timer interface (`r_timer_api.h`) provides a common abstraction for all timer HAL drivers in FSP. It supports:
+
+- Periodic, one-shot, and free-running counter modes
+- Sawtooth-wave and triangle-wave PWM output
+- Input capture on signal A and B
+- Compare-match events on up to 8 channels (A–H)
+- Dead-time insertion (hardware-generated, GPT only)
+- Callback with event code on each timer event
+
+```c
+#include "r_timer_api.h"
+```
+
+### Available Instances
+
+| Instance header | Peripheral | Notes |
+|---|---|---|
+| `r_gpt.h` | GPT — General PWM Timer | 32-bit, all RA series |
+| `r_agt.h` | AGT — Asynchronous General-Purpose Timer | 16-bit, low-power |
+| `r_tau.h` | TAU — Timer Array Unit | RA0/RA2 entry series |
+| `r_tml.h` | TML — Timer L | RA0/RA2 entry series |
+| `r_ulpt.h` | ULPT — Ultra-Low-Power Timer | RA0/RA2 |
+
+---
+
+## Enumerations
+
+### `timer_event_t`
+
+Event codes passed to the user callback.
+
+<ParamField path="TIMER_EVENT_CYCLE_END" type="0">
+  The timer period elapsed or the counter wrapped. Also aliased as `TIMER_EVENT_CREST` (triangle-wave PWM: counter at maximum).
+</ParamField>
+
+<ParamField path="TIMER_EVENT_CAPTURE_A" type="1">
+  A capture event occurred on input signal A. The captured count is in `timer_callback_args_t::capture`.
+</ParamField>
+
+<ParamField path="TIMER_EVENT_CAPTURE_B" type="2">
+  A capture event occurred on input signal B.
+</ParamField>
+
+<ParamField path="TIMER_EVENT_TROUGH" type="3">
+  Triangle-wave PWM: counter reached 0 (trough).
+</ParamField>
+
+<ParamField path="TIMER_EVENT_COMPARE_A … TIMER_EVENT_COMPARE_F" type="4–9">
+  A compare-match occurred on output compare channel A through F.
+</ParamField>
+
+<ParamField path="TIMER_EVENT_DEAD_TIME" type="10">
+  Dead-time insertion event (GPT only).
+</ParamField>
+
+---
+
+### `timer_mode_t`
+
+<ParamField path="TIMER_MODE_PERIODIC" type="0">
+  Timer restarts automatically when the period elapses. The most common mode.
+</ParamField>
+
+<ParamField path="TIMER_MODE_ONE_SHOT" type="1">
+  Timer stops after one period elapses.
+</ParamField>
+
+<ParamField path="TIMER_MODE_PWM" type="2">
+  Sawtooth-wave PWM: the output pin is high for `duty_cycle_counts` then low until the period ends.
+</ParamField>
+
+<ParamField path="TIMER_MODE_ONE_SHOT_PULSE" type="3">
+  Sawtooth-wave one-shot pulse mode with fixed buffer operation.
+</ParamField>
+
+<ParamField path="TIMER_MODE_TRIANGLE_WAVE_SYMMETRIC_PWM" type="4">
+  Symmetric triangle-wave PWM. The counter counts up then down; the output duty cycle is centred.
+</ParamField>
+
+<ParamField path="TIMER_MODE_TRIANGLE_WAVE_ASYMMETRIC_PWM" type="5">
+  Asymmetric triangle-wave PWM. Separate duty-cycle values apply on the up-count and down-count phases.
+</ParamField>
+
+<ParamField path="TIMER_MODE_TRIANGLE_WAVE_ASYMMETRIC_PWM_MODE3" type="6">
+  Asymmetric triangle-wave PWM mode 3. Trough and crest duty values are set once and remain until explicitly updated — no per-cycle update required.
+</ParamField>
+
+---
+
+### `timer_variant_t`
+
+| Value | Description |
+|---|---|
+| `TIMER_VARIANT_32_BIT` | 32-bit counter (GPT) |
+| `TIMER_VARIANT_16_BIT` | 16-bit counter (AGT, TAU, TML) |
+
+---
+
+### `timer_state_t`
+
+| Value | Description |
+|---|---|
+| `TIMER_STATE_STOPPED` | Timer is not running |
+| `TIMER_STATE_COUNTING` | Timer is actively counting |
+| `TIMER_STATE_UNKNOWN` | State could not be determined |
+
+---
+
+### `timer_source_div_t`
+
+Clock source prescaler divisor applied to the input clock before the counter.
+
+| Enum | Divisor |
+|---|---|
+| `TIMER_SOURCE_DIV_1` | ÷1 |
+| `TIMER_SOURCE_DIV_2` | ÷2 |
+| `TIMER_SOURCE_DIV_4` | ÷4 |
+| `TIMER_SOURCE_DIV_8` | ÷8 |
+| `TIMER_SOURCE_DIV_16` | ÷16 |
+| `TIMER_SOURCE_DIV_32` | ÷32 |
+| `TIMER_SOURCE_DIV_64` | ÷64 |
+| `TIMER_SOURCE_DIV_128` | ÷128 |
+| `TIMER_SOURCE_DIV_256` | ÷256 |
+| `TIMER_SOURCE_DIV_512` | ÷512 |
+| `TIMER_SOURCE_DIV_1024` | ÷1024 |
+| `TIMER_SOURCE_DIV_8192` | ÷8192 |
+
+---
+
+## Structures
+
+### `timer_cfg_t`
+
+Configuration structure passed to `timer_api_t::open`.
+
+<ParamField path="mode" type="timer_mode_t" required>
+  Operating mode (periodic, one-shot, PWM, etc.).
+</ParamField>
+
+<ParamField path="period_counts" type="uint32_t" required>
+  Period expressed in raw timer counts. For triangle-wave PWM, enter half the desired period (the full wave takes twice this number of counts).
+</ParamField>
+
+<ParamField path="source_div" type="timer_source_div_t">
+  Clock prescaler. The effective timer clock frequency is `PCLKD / source_div`.
+</ParamField>
+
+<ParamField path="duty_cycle_counts" type="uint32_t">
+  PWM duty cycle in counts. Used for `TIMER_MODE_PWM` and its variants.
+</ParamField>
+
+<ParamField path="channel" type="uint8_t" required>
+  Hardware timer channel number.
+</ParamField>
+
+<ParamField path="cycle_end_ipl" type="uint8_t">
+  Interrupt priority for the cycle-end / overflow interrupt.
+</ParamField>
+
+<ParamField path="cycle_end_irq" type="IRQn_Type">
+  IRQ number assigned by the Smart Configurator.
+</ParamField>
+
+<ParamField path="p_callback" type="void (*)(timer_callback_args_t *)">
+  Callback function invoked on each timer event. Set to `NULL` for polling mode.
+</ParamField>
+
+<ParamField path="p_context" type="void *">
+  User data passed to the callback.
+</ParamField>
+
+<ParamField path="p_extend" type="void const *">
+  Driver-specific extended configuration (output pin, capture source, dead-time, etc.).
+</ParamField>
+
+---
+
+### `timer_callback_args_t`
+
+<ParamField path="event" type="timer_event_t">
+  Which event triggered the callback.
+</ParamField>
+
+<ParamField path="capture" type="uint32_t">
+  Counter value at the time of capture. Only valid for `TIMER_EVENT_CAPTURE_A` and `TIMER_EVENT_CAPTURE_B`.
+</ParamField>
+
+<ParamField path="p_context" type="void *">
+  User context from `timer_cfg_t`.
+</ParamField>
+
+---
+
+### `timer_info_t`
+
+Returned by `infoGet()`.
+
+<ParamField path="count_direction" type="timer_direction_t">
+  `TIMER_DIRECTION_UP` or `TIMER_DIRECTION_DOWN`.
+</ParamField>
+
+<ParamField path="clock_frequency" type="uint32_t">
+  Effective timer counter clock in Hz (after prescaler).
+</ParamField>
+
+<ParamField path="period_counts" type="uint32_t">
+  Current period in raw counts.
+</ParamField>
+
+---
+
+## API — `timer_api_t`
+
+### `open`
+
+```c
+fsp_err_t (* open)(timer_ctrl_t * const p_ctrl, timer_cfg_t const * const p_cfg);
+```
+
+Configures the timer hardware. Does not start the counter.
+
+### `start`
+
+```c
+fsp_err_t (* start)(timer_ctrl_t * const p_ctrl);
+```
+
+Starts the counter. For one-shot mode the counter stops automatically after one period.
+
+### `stop`
+
+```c
+fsp_err_t (* stop)(timer_ctrl_t * const p_ctrl);
+```
+
+Stops the counter. The current count value is preserved.
+
+### `reset`
+
+```c
+fsp_err_t (* reset)(timer_ctrl_t * const p_ctrl);
+```
+
+Resets the counter to the initial value (0 for up-counting, `period_counts` for down-counting).
+
+### `enable` / `disable`
+
+```c
+fsp_err_t (* enable)(timer_ctrl_t * const p_ctrl);
+fsp_err_t (* disable)(timer_ctrl_t * const p_ctrl);
+```
+
+Enables and disables input capture on the configured capture source.
+
+### `periodSet`
+
+```c
+fsp_err_t (* periodSet)(timer_ctrl_t * const p_ctrl, uint32_t const period);
+```
+
+Updates the period (in counts) while the timer is running. The new value takes effect after the next overflow/underflow.
+
+### `dutyCycleSet`
+
+```c
+fsp_err_t (* dutyCycleSet)(timer_ctrl_t * const p_ctrl,
+                           uint32_t const duty_cycle_counts,
+                           uint32_t const pin);
+```
+
+Updates the PWM duty cycle (in counts) for the specified output pin. Takes effect after the next timer period.
+
+### `compareMatchSet`
+
+```c
+fsp_err_t (* compareMatchSet)(timer_ctrl_t * const p_ctrl,
+                              uint32_t const compare_match_value,
+                              timer_compare_match_t const match_channel);
+```
+
+Sets a compare-match threshold in raw counts for the specified channel (A–H).
+
+### `infoGet`
+
+```c
+fsp_err_t (* infoGet)(timer_ctrl_t * const p_ctrl, timer_info_t * const p_info);
+```
+
+Fills `p_info` with the count direction, effective clock frequency, and current period.
+
+### `statusGet`
+
+```c
+fsp_err_t (* statusGet)(timer_ctrl_t * const p_ctrl, timer_status_t * const p_status);
+```
+
+Returns the current counter value and timer state.
+
+### `close`
+
+```c
+fsp_err_t (* close)(timer_ctrl_t * const p_ctrl);
+```
+
+Stops the timer, disables interrupts, and releases the peripheral.
+
+---
+
+## PWM Configuration Example
+
+This example configures GPT channel 0 for 1 kHz sawtooth-wave PWM at 50% duty on a 120 MHz `PCLKD`.
+
+```c
+#include "r_gpt.h"
+
+gpt_instance_ctrl_t g_timer_ctrl;
+
+/*
+ * PCLKD = 120 MHz, prescaler = 1 (TIMER_SOURCE_DIV_1)
+ * Desired frequency = 1 kHz  →  period = 120,000,000 / 1,000 = 120,000 counts
+ * 50% duty cycle → duty = 60,000 counts
+ */
+const timer_cfg_t g_timer_cfg =
+{
+    .mode              = TIMER_MODE_PWM,
+    .period_counts     = 120000U,
+    .source_div        = TIMER_SOURCE_DIV_1,
+    .duty_cycle_counts = 60000U,
+    .channel           = 0,
+    .p_callback        = NULL,   /* No interrupt needed for basic PWM */
+    .p_context         = NULL,
+    .p_extend          = NULL,   /* Set to &g_gpt_extend for output-pin config */
+    /* cycle_end_irq / ipl assigned by Smart Configurator if callback is used */
+};
+
+void pwm_example(void)
+{
+    R_GPT_Open(&g_timer_ctrl, &g_timer_cfg);
+    R_GPT_Start(&g_timer_ctrl);
+
+    /* Change duty cycle at runtime to 25% */
+    R_GPT_DutyCycleSet(&g_timer_ctrl, 30000U, 0 /* pin A */);
+
+    /* Change period at runtime to 500 Hz (240,000 counts) */
+    R_GPT_PeriodSet(&g_timer_ctrl, 240000U);
+}
+```
+
+<Tip>
+  Use `infoGet()` to retrieve the effective `clock_frequency` and compute `period_counts` dynamically rather than hard-coding it. This keeps the code portable across different clock configurations.
+</Tip>

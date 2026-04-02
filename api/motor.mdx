@@ -1,0 +1,148 @@
+---
+title: "Motor Control API"
+description: "Motor control interface types, error codes, and callback events in Renesas FSP."
+---
+
+The FSP motor control API (`rm_motor_api.h`) defines the top-level interface for motor control modules. Concrete implementations include sensorless FOC, encoder FOC, hall sensor control, and 120-degree conduction control.
+
+## Error codes
+
+The `motor_error_t` enum reports fault conditions detected by the motor control stack. Values are bit-flags and can be OR'd together.
+
+```c
+typedef enum e_rm_motor_error
+{
+    MOTOR_ERROR_NONE                     = 0x0000, /* No error */
+    MOTOR_ERROR_OVER_CURRENT_HW          = 0x0001, /* Hardware overcurrent detection */
+    MOTOR_ERROR_OVER_VOLTAGE             = 0x0002, /* DC bus overvoltage */
+    MOTOR_ERROR_OVER_SPEED               = 0x0004, /* Speed limit exceeded */
+    MOTOR_ERROR_HALL_TIMEOUT             = 0x0008, /* Hall sensor timeout */
+    MOTOR_ERROR_BEMF_TIMEOUT             = 0x0010, /* BEMF sensor timeout */
+    MOTOR_ERROR_HALL_PATTERN             = 0x0020, /* Unexpected hall pattern */
+    MOTOR_ERROR_BEMF_PATTERN             = 0x0040, /* Unexpected BEMF pattern */
+    MOTOR_ERROR_LOW_VOLTAGE              = 0x0080, /* DC bus undervoltage */
+    MOTOR_ERROR_OVER_CURRENT_SW          = 0x0100, /* Software overcurrent on phase U/V/W */
+    MOTOR_ERROR_INDUCTION_CORRECT        = 0x0200, /* Incorrect inductance setting */
+    MOTOR_ERROR_ABNOMAL_OFFSET_VALUE     = 0x0400, /* ADC current offset out of range */
+    MOTOR_ERROR_PHASE_CONNECTION_FAILURE = 0x0800, /* Duty/current waveform mismatch */
+    MOTOR_ERROR_DISCONNECTION_DETECTION  = 0x1000, /* Phase current always 0A during PWM output */
+    MOTOR_ERROR_MTPA_INCORRECT           = 0x2000, /* MTPA parameter error */
+    MOTOR_ERROR_FLUX_WEAKENING           = 0x4000, /* Flux weakening error */
+    MOTOR_ERROR_UNKNOWN                  = 0xFFFF, /* Unknown error */
+} motor_error_t;
+```
+
+## Callback events
+
+```c
+typedef enum e_motor_callback_event
+{
+    MOTOR_CALLBACK_EVENT_SPEED_FORWARD   = 1, ///< Speed control forward cycle
+    MOTOR_CALLBACK_EVENT_SPEED_BACKWARD,      ///< Speed control backward cycle
+    MOTOR_CALLBACK_EVENT_CURRENT_FORWARD,     ///< Current control forward cycle
+    MOTOR_CALLBACK_EVENT_CURRENT_BACKWARD,    ///< Current control backward cycle
+    MOTOR_CALLBACK_EVENT_ADC_FORWARD,         ///< Before 120-driver ADC process
+    MOTOR_CALLBACK_EVENT_ADC_BACKWARD,        ///< After 120-driver ADC process
+    MOTOR_CALLBACK_EVENT_CYCLE_FORWARD,       ///< Before cyclic speed control process
+    MOTOR_CALLBACK_EVENT_CYCLE_BACKWARD,      ///< After cyclic speed control process
+    MOTOR_CALLBACK_EVENT_ERROR,               ///< Error detected
+} motor_callback_event_t;
+```
+
+## Configuration struct
+
+<ParamField path="p_motor_speed_instance" type="motor_speed_instance_t const *">
+  Pointer to the speed control instance (e.g. `rm_motor_speed`). Conditionally compiled if `rm_motor_speed_api.h` is present.
+</ParamField>
+
+<ParamField path="p_motor_current_instance" type="motor_current_instance_t const *">
+  Pointer to the current control instance (e.g. `rm_motor_current`). Conditionally compiled if `rm_motor_current_api.h` is present.
+</ParamField>
+
+<ParamField path="p_callback" type="void (*)(motor_callback_args_t *)">
+  User callback function invoked on motor events and errors.
+</ParamField>
+
+<ParamField path="p_context" type="void const *">
+  User context pointer passed back in callback arguments.
+</ParamField>
+
+## Motor API function interface
+
+```c
+typedef struct st_motor_api
+{
+    fsp_err_t (* open)(motor_ctrl_t * const p_ctrl, motor_cfg_t const * const p_cfg);
+    fsp_err_t (* close)(motor_ctrl_t * const p_ctrl);
+    fsp_err_t (* run)(motor_ctrl_t * const p_ctrl);
+    fsp_err_t (* stop)(motor_ctrl_t * const p_ctrl);
+    fsp_err_t (* reset)(motor_ctrl_t * const p_ctrl);
+    fsp_err_t (* errorSet)(motor_ctrl_t * const p_ctrl, motor_error_t const error);
+    fsp_err_t (* speedSet)(motor_ctrl_t * const p_ctrl, float const speed_rpm);
+    fsp_err_t (* positionSet)(motor_ctrl_t * const p_ctrl,
+                              motor_speed_position_data_t const * const p_position);
+    fsp_err_t (* statusGet)(motor_ctrl_t * const p_ctrl, uint8_t * const p_status);
+    fsp_err_t (* angleGet)(motor_ctrl_t * const p_ctrl, float * const p_angle_rad);
+    fsp_err_t (* speedGet)(motor_ctrl_t * const p_ctrl, float * const p_speed_rpm);
+    fsp_err_t (* waitStopFlagGet)(motor_ctrl_t * const p_ctrl,
+                                  motor_wait_stop_flag_t * const p_flag);
+    fsp_err_t (* errorCheck)(motor_ctrl_t * const p_ctrl, uint16_t * const p_error);
+    fsp_err_t (* functionSelect)(motor_ctrl_t * const p_ctrl,
+                                 motor_function_select_t const function);
+} motor_api_t;
+```
+
+## Usage example
+
+```c motor_example.c
+#include "rm_motor_sensorless.h"
+
+/* Instances generated by RASC in hal_data.c */
+extern motor_instance_t g_motor0;
+
+void motor_example(void)
+{
+    fsp_err_t err;
+
+    /* Open motor control stack */
+    err = g_motor0.p_api->open(g_motor0.p_ctrl, g_motor0.p_cfg);
+    FSP_ERROR_RETURN(FSP_SUCCESS == err, err);
+
+    /* Start motor */
+    err = g_motor0.p_api->run(g_motor0.p_ctrl);
+    FSP_ERROR_RETURN(FSP_SUCCESS == err, err);
+
+    /* Set target speed: 1000 RPM */
+    err = g_motor0.p_api->speedSet(g_motor0.p_ctrl, 1000.0f);
+    FSP_ERROR_RETURN(FSP_SUCCESS == err, err);
+
+    /* Check for errors */
+    uint16_t error_flags = 0U;
+    err = g_motor0.p_api->errorCheck(g_motor0.p_ctrl, &error_flags);
+    if (MOTOR_ERROR_NONE != error_flags)
+    {
+        /* Handle error — stop and reset */
+        g_motor0.p_api->stop(g_motor0.p_ctrl);
+        g_motor0.p_api->reset(g_motor0.p_ctrl);
+    }
+}
+```
+
+## Available motor control modules
+
+| Module | Type | Sensor |
+|--------|------|--------|
+| `rm_motor_sensorless` | FOC (PMSM) | Sensorless (BEMF estimation) |
+| `rm_motor_encoder` | FOC (PMSM) | Encoder |
+| `rm_motor_hall` | FOC (PMSM/BLDC) | Hall sensors |
+| `rm_motor_induction` | FOC | Induction sensor |
+| `rm_motor_120_degree` | 120° conduction | Hall or sensorless |
+
+<CardGroup cols={2}>
+  <Card title="Motor Control Middleware" icon="gear" href="/middleware/motor-control">
+    Overview of the full motor control stack
+  </Card>
+  <Card title="Timer Drivers" icon="clock" href="/drivers/timers">
+    GPT three-phase PWM required by motor drivers
+  </Card>
+</CardGroup>

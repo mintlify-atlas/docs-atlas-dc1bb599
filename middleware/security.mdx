@@ -1,0 +1,215 @@
+---
+title: 'Security'
+description: 'Hardware crypto engines, MbedTLS acceleration, TrustZone, MCUboot secure bootloader, and Trusted Firmware-M for RA MCUs.'
+keywords: ['RSIP', 'SCE', 'MbedTLS', 'TrustZone', 'MCUboot', 'TF-M', 'PSA', 'CAVP', 'rm_mbedtls', 'rm_psa_crypto']
+---
+
+FSP exposes the RA series hardware cryptographic engines through a layered software stack, from raw hardware APIs up to standard interfaces such as PSA Crypto and MbedTLS. Secure boot and TrustZone support are available for all RA series that carry Arm Cortex-M33 cores.
+
+## Hardware crypto engines
+
+RA MCUs include one of two hardware security IP blocks depending on the device family.
+
+<CardGroup cols={2}>
+  <Card title="RSIP (RA8 series)" icon="shield">
+    Renesas Secure IP — present on RA8M1, RA8D1, RA8T1, and RA8E1. Accelerates AES-128/256, RSA-2048/4096, ECC (P-256/P-384/P-521), SHA-256/384/512, HMAC, and TRNG. Multiple CAVP-certified variants are available.
+  </Card>
+  <Card title="SCE (RA6 / RA4 series)" icon="lock">
+    Secure Crypto Engine — present on RA6M1–RA6M5, RA4M1, RA4M2, RA4M3, and related devices. Accelerates AES-128/256, RSA-2048, ECC, SHA-256, and TRNG. CAVP-certified variant available.
+  </Card>
+</CardGroup>
+
+### RSIP protected mode vs SCE protected mode
+
+Both engines expose a **protected mode** that keeps key material inside the hardware security boundary. Applications never see plaintext key bytes; they work with wrapped (encrypted) key objects.
+
+| Feature | RSIP Protected (`r_rsip_protected`) | SCE Protected (`r_sce_protected`) |
+|---------|--------------------------------------|----------------------------------|
+| Devices | RA8 series | RA6/RA4 series |
+| Key wrapping | Renesas Key Wrap Service (KWS) | Renesas Security Key Management Technology |
+| CAVP certification | Yes — RSIP-E11A, E31A, E51A CAVP-certified variants | Yes — `r_sce_protected_cavp` |
+| PSA Crypto backend | `rm_psa_crypto` | `rm_psa_crypto` |
+| MbedTLS backend | `rm_mbedtls` | `rm_mbedtls` |
+
+<Note>
+CAVP (Cryptographic Algorithm Validation Program) certification means the algorithm implementation has been independently validated by NIST-accredited laboratories. Use the `_cavp` module variants (`r_rsip_e11a_protected_cavp`, `r_rsip_e51a_protected_cavp`, `r_sce_protected_cavp`) when compliance is required.
+</Note>
+
+## MbedTLS with FSP hardware acceleration
+
+FSP provides two port modules that route MbedTLS and PSA Crypto operations through the RSIP or SCE hardware engine.
+
+### rm_mbedtls — MbedTLS FSP port
+
+`rm_mbedtls` configures the MbedTLS library to use RSIP or SCE for accelerated operations. Add it to your RASC stack under **Security → MbedTLS FSP Port (rm_mbedtls)**. The port automatically selects the correct hardware engine based on the target device.
+
+```c
+#include "mbedtls/ssl.h"
+#include "mbedtls/entropy.h"
+#include "mbedtls/ctr_drbg.h"
+#include "rm_mbedtls_config.h"  /* FSP-generated MbedTLS configuration */
+
+/* MbedTLS TLS client connection setup */
+mbedtls_ssl_context     ssl;
+mbedtls_ssl_config      conf;
+mbedtls_entropy_context entropy;
+mbedtls_ctr_drbg_context ctr_drbg;
+
+void tls_client_init(void)
+{
+    mbedtls_ssl_init(&ssl);
+    mbedtls_ssl_config_init(&conf);
+    mbedtls_entropy_init(&entropy);
+    mbedtls_ctr_drbg_init(&ctr_drbg);
+
+    /* Seed the DRBG — uses RSIP/SCE TRNG automatically via rm_mbedtls port */
+    mbedtls_ctr_drbg_seed(&ctr_drbg,
+                           mbedtls_entropy_func,
+                           &entropy,
+                           (const unsigned char *) "fsp_tls",
+                           7U);
+
+    mbedtls_ssl_config_defaults(&conf,
+                                 MBEDTLS_SSL_IS_CLIENT,
+                                 MBEDTLS_SSL_TRANSPORT_STREAM,
+                                 MBEDTLS_SSL_PRESET_DEFAULT);
+
+    mbedtls_ssl_conf_rng(&conf, mbedtls_ctr_drbg_random, &ctr_drbg);
+    mbedtls_ssl_setup(&ssl, &conf);
+}
+```
+
+For FreeRTOS applications, also add **FreeRTOS MbedTLS Port** and **FreeRTOS MbedTLS Threading Feature** to enable thread-safe MbedTLS operation via FreeRTOS mutexes.
+
+### rm_psa_crypto — PSA Crypto port
+
+`rm_psa_crypto` implements the PSA Cryptography API (part of the Arm Platform Security Architecture) with RSIP or SCE hardware backing. It is the recommended interface for new applications that need to remain portable.
+
+```c
+#include "psa/crypto.h"
+
+fsp_err_t generate_aes_key_example(void)
+{
+    psa_status_t status;
+    psa_key_id_t key_id;
+
+    psa_key_attributes_t attrs = PSA_KEY_ATTRIBUTES_INIT;
+    psa_set_key_usage_flags(&attrs, PSA_KEY_USAGE_ENCRYPT | PSA_KEY_USAGE_DECRYPT);
+    psa_set_key_algorithm(&attrs, PSA_ALG_CBC_NO_PADDING);
+    psa_set_key_type(&attrs, PSA_KEY_TYPE_AES);
+    psa_set_key_bits(&attrs, 256U);
+
+    status = psa_generate_key(&attrs, &key_id);
+    if (status != PSA_SUCCESS)
+    {
+        return FSP_ERR_CRYPTO_COMMON_NOT_OPENED;
+    }
+    return FSP_SUCCESS;
+}
+```
+
+### Alternative crypto libraries
+
+| Module | Acceleration | Notes |
+|--------|-------------|-------|
+| Ocrypto (`rm_ocrypto_port`) | H/W (RSIP/SCE) or S/W | Nordic nrf-oberon based, compact footprint |
+| TinyCrypt (`rm_mcuboot_tinycrypt_port`) | H/W or S/W | Used internally by MCUboot |
+
+## TrustZone
+
+ARM TrustZone is available on Cortex-M33-based RA devices (RA6M4, RA6M5, RA4M2, RA4M3, RA8 series). FSP supports building split Secure/Non-Secure projects.
+
+### ARM TrustZone Context (`rm_tz_context`)
+
+The `rm_tz_context` module (`TrustZone → ARM TrustZone Context RA Port`) handles TrustZone context save/restore during RTOS context switches in Non-Secure builds. It implements the `TZ_SaveContext_S` / `TZ_LoadContext_S` / `TZ_AllocModuleContext_S` functions defined in CMSIS.
+
+```c
+/* In a Non-Secure FreeRTOS build, rm_tz_context is called transparently
+ * by the rm_freertos_port context switch code.
+ * No explicit application calls are needed when using RASC-generated code. */
+
+/* The initial EXC_RETURN value in portmacro.h is set to 0xFFFFFFBC
+ * (Bit[6]=0 → exception taken from Non-Secure state) when
+ * BSP_TZ_NONSECURE_BUILD is defined. */
+```
+
+### TrustZone project structure in RASC
+
+<Steps>
+  <Step title="Create a Secure project">
+    Create one RA project with **Build Type: Secure**. This project owns the SAU configuration, Secure memory regions, and exports Non-Secure callable (NSC) functions.
+  </Step>
+  <Step title="Create a Non-Secure project">
+    Create a second RA project with **Build Type: Non-Secure**. Add FSP drivers and RTOS modules here. The Non-Secure project links against the Secure project's veneer library.
+  </Step>
+  <Step title="Configure SAU in BSP">
+    In the Secure project's BSP properties, configure the Security Attribution Unit (SAU) regions to map code, data, and peripheral regions as Secure, Non-Secure, or Non-Secure Callable.
+  </Step>
+</Steps>
+
+## MCUboot secure bootloader
+
+MCUboot is an open-source secure bootloader for microcontrollers. FSP provides `rm_mcuboot_port` to integrate MCUboot with RA flash drivers, and `MCUboot Image Utilities` for image management.
+
+```c
+/* MCUboot image header check — called from a Secure application
+ * to verify the Non-Secure application before booting it */
+#include "bootutil/bootutil.h"
+#include "bootutil/image.h"
+
+void secure_boot_entry(void)
+{
+    struct boot_rsp rsp;
+    fih_int fih_rc = FIH_FAILURE;
+
+    /* boot_go() verifies the image in the primary slot using
+     * the key material configured in rm_mcuboot_port */
+    FIH_CALL(boot_go, fih_rc, &rsp);
+
+    if (fih_eq(fih_rc, FIH_SUCCESS) == FIH_TRUE)
+    {
+        /* Jump to the verified application */
+        ((void (*)(void)) rsp.br_image_off)();
+    }
+
+    /* Verification failed — halt or enter recovery mode */
+    for (;;) { }
+}
+```
+
+MCUboot in FSP supports:
+
+- **Overwrite-only** and **swap with scratch** upgrade strategies
+- External flash (`MCUboot External Memory (QSPI)`, `MCUboot External Memory (OSPI_B)`)
+- Hardware-accelerated signature verification via `rm_mcuboot_tinycrypt_port` (SCE/RSIP-backed TinyCrypt)
+- AWS IoT OTA integration for remote firmware updates
+
+<Warning>
+The module **MCUboot Example Keys (NOT FOR PRODUCTION)** generates a pre-made RSA/ECC key pair for development convenience. Replace these keys with project-specific keys before production. Private key material must never be shipped in production firmware.
+</Warning>
+
+## Trusted Firmware-M (TF-M)
+
+Trusted Firmware-M is the reference implementation of the PSA Secure Processing Environment for Cortex-M. FSP includes the following TF-M modules:
+
+| Module | Role |
+|--------|------|
+| `Trusted Firmware-M` | Main Secure partition code and IPC mechanism |
+| `Trusted Firmware-M BL2` | MCUboot-based BL2 second-stage bootloader integrated with TF-M |
+| `Trusted Firmware-M Non-Secure` | Non-Secure interface library (NS app links against this) |
+
+TF-M exposes PSA services (Crypto, Protected Storage, Internal Trusted Storage, Attestation) to the Non-Secure world through a standardized API, allowing Non-Secure firmware to use RSIP/SCE without direct hardware access.
+
+```c
+/* Non-Secure application accessing PSA Crypto through TF-M */
+#include "psa/crypto.h"
+
+/* psa_generate_random() routes through TF-M's Crypto service,
+ * which uses RSIP/SCE TRNG in the Secure partition */
+uint8_t random_buf[32];
+psa_status_t status = psa_generate_random(random_buf, sizeof(random_buf));
+```
+
+<Tip>
+Use TF-M when you need multiple isolated Secure partitions (e.g., a Crypto partition and a custom attestation partition) or when targeting PSA Certified Level 2 or higher for your product.
+</Tip>

@@ -1,0 +1,382 @@
+---
+title: "UART Interface"
+description: "Full-duplex asynchronous serial communication API for Renesas FSP. Covers events, configuration structs, and the uart_api_t function pointer table."
+---
+
+## Overview
+
+The UART interface (`r_uart_api.h`) provides a common abstraction for all UART HAL drivers in FSP. Features include:
+
+- Full-duplex UART communication
+- Interrupt-driven transmit and receive
+- Callback with event code
+- Runtime baud-rate change via `baudSet()`
+- Hardware resource locking during a transaction
+- CTS/RTS hardware flow control (with associated IOPORT pin)
+- Optional DTC/DMAC transfer for high-throughput operation
+
+```c
+#include "r_uart_api.h"
+```
+
+### Available Instances
+
+| Instance header | Peripheral |
+|---|---|
+| `r_sci_uart.h` | SCI UART (most RA series) |
+| `r_sci_b_uart.h` | SCI_B UART (RA8 series) |
+| `r_sau_uart.h` | SAU UART (RA0/RA2 series) |
+| `r_uarta.h` | UARTA (RA0E1/RA0E2/RA0L1) |
+
+---
+
+## Enumerations
+
+### `uart_event_t`
+
+Event codes passed to the user callback in `uart_callback_args_t::event`. Events are bit flags and may be combined.
+
+<ParamField path="UART_EVENT_RX_COMPLETE" type="(1UL << 0)">
+  Receive of the requested byte count is complete (transfer-mode RX only).
+</ParamField>
+
+<ParamField path="UART_EVENT_TX_COMPLETE" type="(1UL << 1)">
+  All bytes have been fully transmitted on the wire.
+</ParamField>
+
+<ParamField path="UART_EVENT_RX_CHAR" type="(1UL << 2)">
+  A single character was received outside of an active `read()` transfer. The received byte is in `uart_callback_args_t::data`.
+</ParamField>
+
+<ParamField path="UART_EVENT_ERR_PARITY" type="(1UL << 3)">
+  Parity error detected. The offending byte is in `uart_callback_args_t::data`.
+</ParamField>
+
+<ParamField path="UART_EVENT_ERR_FRAMING" type="(1UL << 4)">
+  Framing error detected.
+</ParamField>
+
+<ParamField path="UART_EVENT_ERR_OVERFLOW" type="(1UL << 5)">
+  FIFO / receive buffer overflow.
+</ParamField>
+
+<ParamField path="UART_EVENT_BREAK_DETECT" type="(1UL << 6)">
+  Break condition detected on the RX line.
+</ParamField>
+
+<ParamField path="UART_EVENT_TX_DATA_EMPTY" type="(1UL << 7)">
+  The last byte is currently being transmitted; the driver is ready to accept more data.
+</ParamField>
+
+---
+
+### `uart_data_bits_t`
+
+<ParamField path="UART_DATA_BITS_9" type="0U">
+  9-bit data frame.
+</ParamField>
+
+<ParamField path="UART_DATA_BITS_8" type="2U">
+  8-bit data frame (most common).
+</ParamField>
+
+<ParamField path="UART_DATA_BITS_7" type="3U">
+  7-bit data frame.
+</ParamField>
+
+---
+
+### `uart_parity_t`
+
+<ParamField path="UART_PARITY_OFF" type="0U">
+  No parity bit.
+</ParamField>
+
+<ParamField path="UART_PARITY_ZERO" type="1U">
+  Zero (space) parity.
+</ParamField>
+
+<ParamField path="UART_PARITY_EVEN" type="2U">
+  Even parity.
+</ParamField>
+
+<ParamField path="UART_PARITY_ODD" type="3U">
+  Odd parity.
+</ParamField>
+
+---
+
+### `uart_stop_bits_t`
+
+<ParamField path="UART_STOP_BITS_1" type="0U">
+  1 stop bit.
+</ParamField>
+
+<ParamField path="UART_STOP_BITS_2" type="1U">
+  2 stop bits.
+</ParamField>
+
+---
+
+### `uart_dir_t`
+
+Direction selector used with `communicationAbort()`.
+
+| Value | Numeric | Description |
+|---|---|---|
+| `UART_DIR_RX_TX` | 3 | Both RX and TX |
+| `UART_DIR_RX` | 1 | RX only |
+| `UART_DIR_TX` | 2 | TX only |
+
+---
+
+## Structures
+
+### `uart_cfg_t`
+
+Configuration structure passed to `uart_api_t::open`.
+
+<ParamField path="channel" type="uint8_t" required>
+  Hardware channel number (e.g., 0 for SCI0).
+</ParamField>
+
+<ParamField path="data_bits" type="uart_data_bits_t" required>
+  Data word length: `UART_DATA_BITS_8`, `UART_DATA_BITS_7`, or `UART_DATA_BITS_9`.
+</ParamField>
+
+<ParamField path="parity" type="uart_parity_t" required>
+  Parity: `UART_PARITY_OFF`, `UART_PARITY_EVEN`, or `UART_PARITY_ODD`.
+</ParamField>
+
+<ParamField path="stop_bits" type="uart_stop_bits_t" required>
+  Stop bits: `UART_STOP_BITS_1` or `UART_STOP_BITS_2`.
+</ParamField>
+
+<ParamField path="rxi_ipl / txi_ipl / tei_ipl / eri_ipl" type="uint8_t">
+  Interrupt priority levels for receive, transmit, transmit-end, and error interrupts (0–15, lower is higher priority on RA).
+</ParamField>
+
+<ParamField path="rxi_irq / txi_irq / tei_irq / eri_irq" type="IRQn_Type">
+  IRQ numbers assigned by the Smart Configurator for each interrupt source.
+</ParamField>
+
+<ParamField path="p_transfer_rx" type="transfer_instance_t const *">
+  Optional DTC/DMAC transfer instance for interrupt-free bulk receive. Set to `NULL` to use single-byte interrupt mode.
+</ParamField>
+
+<ParamField path="p_transfer_tx" type="transfer_instance_t const *">
+  Optional DTC/DMAC transfer instance for interrupt-free bulk transmit. Set to `NULL` to use single-byte interrupt mode.
+</ParamField>
+
+<ParamField path="p_callback" type="void (*)(uart_callback_args_t *)">
+  User callback function invoked on UART events. Must not be `NULL` if interrupts are used.
+</ParamField>
+
+<ParamField path="p_context" type="void *">
+  Opaque pointer passed unchanged to the callback in `uart_callback_args_t::p_context`.
+</ParamField>
+
+<ParamField path="p_extend" type="void const *">
+  Pointer to driver-specific extended configuration (e.g., `sci_uart_extended_cfg_t` for `r_sci_uart`). Set to `NULL` to use driver defaults.
+</ParamField>
+
+---
+
+### `uart_callback_args_t`
+
+Passed to the user callback by the driver ISR.
+
+<ParamField path="channel" type="uint32_t">
+  Hardware channel number that generated the event.
+</ParamField>
+
+<ParamField path="event" type="uart_event_t">
+  Bitmask of events that occurred (see `uart_event_t`).
+</ParamField>
+
+<ParamField path="data" type="uint32_t">
+  For `UART_EVENT_RX_CHAR`, `UART_EVENT_ERR_PARITY`, `UART_EVENT_ERR_FRAMING`, and `UART_EVENT_ERR_OVERFLOW`: contains the received/erroneous byte. Otherwise unused.
+</ParamField>
+
+<ParamField path="p_context" type="void *">
+  The `p_context` pointer from `uart_cfg_t`.
+</ParamField>
+
+---
+
+### `uart_info_t`
+
+Returned by `infoGet()`. Reports the maximum transfer size when a DTC/DMAC transfer instance is attached.
+
+<ParamField path="write_bytes_max" type="uint32_t">
+  Maximum bytes that can be written in a single `write()` call (only meaningful when `p_transfer_tx` is non-NULL).
+</ParamField>
+
+<ParamField path="read_bytes_max" type="uint32_t">
+  Maximum bytes that can be read in a single `read()` call (only meaningful when `p_transfer_rx` is non-NULL).
+</ParamField>
+
+---
+
+## API — `uart_api_t`
+
+The `uart_api_t` struct holds function pointers implemented by each UART driver. The `uart_instance_t` struct groups the control block, configuration, and API pointer together.
+
+### `open`
+
+```c
+fsp_err_t (* open)(uart_ctrl_t * const p_ctrl, uart_cfg_t const * const p_cfg);
+```
+
+Initialises the UART hardware and driver state. Must be called before any other API. Returns `FSP_ERR_ALREADY_OPEN` if called on an already-open channel.
+
+### `read`
+
+```c
+fsp_err_t (* read)(uart_ctrl_t * const p_ctrl, uint8_t * const p_dest, uint32_t const bytes);
+```
+
+Starts a receive operation. When complete, the callback fires with `UART_EVENT_RX_COMPLETE`. Characters received outside an active `read()` are delivered one at a time via `UART_EVENT_RX_CHAR`.
+
+### `write`
+
+```c
+fsp_err_t (* write)(uart_ctrl_t * const p_ctrl, uint8_t const * const p_src, uint32_t const bytes);
+```
+
+Queues `bytes` bytes for transmission. Do not modify the source buffer until `UART_EVENT_TX_COMPLETE` fires.
+
+### `baudSet`
+
+```c
+fsp_err_t (* baudSet)(uart_ctrl_t * const p_ctrl, void const * const p_baudrate_info);
+```
+
+Changes the baud rate at runtime. Any in-progress transmission is aborted and reception is temporarily disabled while the new settings are applied. `p_baudrate_info` points to a driver-specific baud rate structure.
+
+### `infoGet`
+
+```c
+fsp_err_t (* infoGet)(uart_ctrl_t * const p_ctrl, uart_info_t * const p_info);
+```
+
+Retrieves driver-specific information including maximum transfer sizes.
+
+### `communicationAbort`
+
+```c
+fsp_err_t (* communicationAbort)(uart_ctrl_t * const p_ctrl, uart_dir_t communication_to_abort);
+```
+
+Aborts an ongoing transmit, receive, or both. The `communication_to_abort` argument selects the direction(s) using `uart_dir_t`.
+
+### `callbackSet`
+
+```c
+fsp_err_t (* callbackSet)(uart_ctrl_t * const p_ctrl,
+                          void (* p_callback)(uart_callback_args_t *),
+                          void * const p_context,
+                          uart_callback_args_t * const p_callback_memory);
+```
+
+Registers or replaces the callback at runtime. `p_callback_memory` points to non-secure callback memory required when calling from Non-Secure context (TrustZone).
+
+### `readStop`
+
+```c
+fsp_err_t (* readStop)(uart_ctrl_t * const p_ctrl, uint32_t * remaining_bytes);
+```
+
+Stops an in-progress `read()` and returns the number of bytes not yet received in `*remaining_bytes`.
+
+### `receiveSuspend` / `receiveResume`
+
+```c
+fsp_err_t (* receiveSuspend)(uart_ctrl_t * const p_ctrl);
+fsp_err_t (* receiveResume)(uart_ctrl_t * const p_ctrl);
+```
+
+Temporarily suspends and resumes the RX data path without closing the driver.
+
+### `close`
+
+```c
+fsp_err_t (* close)(uart_ctrl_t * const p_ctrl);
+```
+
+Disables the UART hardware and releases the channel for reuse.
+
+---
+
+## Initialization Example
+
+```c
+#include "r_sci_uart.h"
+
+/* Control block and config — typically generated by the Smart Configurator */
+sci_uart_instance_ctrl_t g_uart_ctrl;
+
+static void uart_callback(uart_callback_args_t * p_args)
+{
+    switch (p_args->event)
+    {
+        case UART_EVENT_RX_COMPLETE:
+            /* Buffer full — process received data */
+            break;
+
+        case UART_EVENT_TX_COMPLETE:
+            /* All bytes transmitted */
+            break;
+
+        case UART_EVENT_RX_CHAR:
+            /* Single byte received: p_args->data holds the character */
+            break;
+
+        case UART_EVENT_ERR_PARITY:
+        case UART_EVENT_ERR_FRAMING:
+        case UART_EVENT_ERR_OVERFLOW:
+            /* Handle UART error */
+            break;
+
+        default:
+            break;
+    }
+}
+
+const uart_cfg_t g_uart_cfg =
+{
+    .channel    = 0,
+    .data_bits  = UART_DATA_BITS_8,
+    .parity     = UART_PARITY_OFF,
+    .stop_bits  = UART_STOP_BITS_1,
+    .p_callback = uart_callback,
+    .p_context  = NULL,
+    .p_extend   = NULL,        /* Set to &g_sci_uart_cfg_extend for SCI-specific settings */
+    /* IRQ and priority fields are set by Smart Configurator */
+};
+
+void uart_example(void)
+{
+    fsp_err_t err;
+    uint8_t   rx_buf[64];
+
+    /* Open the UART channel */
+    err = R_SCI_UART_Open(&g_uart_ctrl, &g_uart_cfg);
+    if (FSP_SUCCESS != err) { return; }
+
+    /* Send a null-terminated string */
+    const char msg[] = "Hello, FSP!\r\n";
+    err = R_SCI_UART_Write(&g_uart_ctrl, (uint8_t *) msg, sizeof(msg) - 1);
+
+    /* Start a 64-byte receive — callback fires when buffer is full */
+    err = R_SCI_UART_Read(&g_uart_ctrl, rx_buf, sizeof(rx_buf));
+
+    /* … application runs … */
+
+    R_SCI_UART_Close(&g_uart_ctrl);
+}
+```
+
+<Tip>
+  When using DMA/DTC (`p_transfer_tx` / `p_transfer_rx`), `write()` and `read()` return immediately and the callback fires when the transfer engine finishes. Without a transfer instance, bytes are moved one at a time in the ISR.
+</Tip>

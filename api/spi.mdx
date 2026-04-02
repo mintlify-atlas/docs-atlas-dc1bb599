@@ -1,0 +1,342 @@
+---
+title: "SPI Interface"
+description: "Synchronous serial peripheral interface API for Renesas FSP, supporting master and slave operation with full-duplex transfers."
+---
+
+## Overview
+
+The SPI interface (`r_spi_api.h`) provides a common abstraction for all SPI HAL drivers in FSP. It supports:
+
+- Master and slave operating modes
+- Full-duplex, half-duplex transmit, and half-duplex receive
+- Configurable clock phase, polarity, bit order, and data width (4–32 bits)
+- Interrupt-driven transfers with callback
+- Optional DTC/DMAC transfer for high-throughput operation
+
+```c
+#include "r_spi_api.h"
+```
+
+### Available Instances
+
+| Instance header | Peripheral |
+|---|---|
+| `r_spi.h` | RSPI (RA6/RA4 high-performance) |
+| `r_spi_b.h` | SPI_B (RA8 series) |
+| `r_sci_spi.h` | SCI in SPI mode (most RA series) |
+| `r_sci_b_spi.h` | SCI_B in SPI mode (RA8 series) |
+| `r_sau_spi.h` | SAU in SPI mode (RA0/RA2 series) |
+
+---
+
+## Enumerations
+
+### `spi_event_t`
+
+Event code passed to the user callback.
+
+<ParamField path="SPI_EVENT_TRANSFER_COMPLETE" type="1">
+  The data transfer completed successfully.
+</ParamField>
+
+<ParamField path="SPI_EVENT_TRANSFER_ABORTED" type="2">
+  The data transfer was aborted.
+</ParamField>
+
+<ParamField path="SPI_EVENT_ERR_MODE_FAULT" type="3">
+  Mode fault: another master has driven SS low while this device is configured as master.
+</ParamField>
+
+<ParamField path="SPI_EVENT_ERR_READ_OVERFLOW" type="4">
+  Read overflow: data arrived before the previous word was read.
+</ParamField>
+
+<ParamField path="SPI_EVENT_ERR_PARITY" type="5">
+  Parity error (SPI parity mode only).
+</ParamField>
+
+<ParamField path="SPI_EVENT_ERR_OVERRUN" type="6">
+  Overrun error.
+</ParamField>
+
+<ParamField path="SPI_EVENT_ERR_FRAMING" type="7">
+  Framing error.
+</ParamField>
+
+<ParamField path="SPI_EVENT_ERR_MODE_UNDERRUN" type="8">
+  Underrun error in slave mode.
+</ParamField>
+
+---
+
+### `spi_mode_t`
+
+<ParamField path="SPI_MODE_MASTER" type="0">
+  Channel operates as SPI master. The driver drives the clock and SS lines.
+</ParamField>
+
+<ParamField path="SPI_MODE_SLAVE" type="1">
+  Channel operates as SPI slave. Clock and SS are driven by the external master.
+</ParamField>
+
+---
+
+### `spi_clk_phase_t`
+
+Controls when data is sampled relative to the clock edge.
+
+<ParamField path="SPI_CLK_PHASE_EDGE_ODD" type="0">
+  Data sampling on odd (first) edge; data changes on even edge. CPHA=0.
+</ParamField>
+
+<ParamField path="SPI_CLK_PHASE_EDGE_EVEN" type="1">
+  Data changes on odd (first) edge; data sampling on even edge. CPHA=1.
+</ParamField>
+
+---
+
+### `spi_clk_polarity_t`
+
+Controls the idle state of the clock line.
+
+<ParamField path="SPI_CLK_POLARITY_LOW" type="0">
+  Clock polarity is low when idle. CPOL=0.
+</ParamField>
+
+<ParamField path="SPI_CLK_POLARITY_HIGH" type="1">
+  Clock polarity is high when idle. CPOL=1.
+</ParamField>
+
+<Note>
+  Combining `spi_clk_phase_t` and `spi_clk_polarity_t` gives the four standard SPI modes: Mode 0 (CPOL=0, CPHA=0), Mode 1 (CPOL=0, CPHA=1), Mode 2 (CPOL=1, CPHA=0), Mode 3 (CPOL=1, CPHA=1).
+</Note>
+
+---
+
+### `spi_bit_order_t`
+
+<ParamField path="SPI_BIT_ORDER_MSB_FIRST" type="0">
+  Most-significant bit transmitted first.
+</ParamField>
+
+<ParamField path="SPI_BIT_ORDER_LSB_FIRST" type="1">
+  Least-significant bit transmitted first.
+</ParamField>
+
+---
+
+### `spi_bit_width_t`
+
+Data word width for a transfer. Values range from `SPI_BIT_WIDTH_4_BITS` (3) to `SPI_BIT_WIDTH_32_BITS` (31). The enum value is `width - 1`.
+
+| Enum | Value | Bits |
+|---|---|---|
+| `SPI_BIT_WIDTH_4_BITS` | 3 | 4 |
+| `SPI_BIT_WIDTH_8_BITS` | 7 | 8 |
+| `SPI_BIT_WIDTH_16_BITS` | 15 | 16 |
+| `SPI_BIT_WIDTH_32_BITS` | 31 | 32 |
+
+---
+
+### `spi_mode_fault_t`
+
+Controls whether a mode fault error is reported when a slave-select conflict is detected.
+
+| Value | Description |
+|---|---|
+| `SPI_MODE_FAULT_ERROR_ENABLE` | Enable mode fault error detection |
+| `SPI_MODE_FAULT_ERROR_DISABLE` | Disable mode fault error detection |
+
+---
+
+## Structures
+
+### `spi_cfg_t`
+
+Configuration structure passed to `spi_api_t::open`.
+
+<ParamField path="channel" type="uint8_t" required>
+  Hardware channel number.
+</ParamField>
+
+<ParamField path="operating_mode" type="spi_mode_t" required>
+  `SPI_MODE_MASTER` or `SPI_MODE_SLAVE`.
+</ParamField>
+
+<ParamField path="clk_phase" type="spi_clk_phase_t" required>
+  CPHA selection.
+</ParamField>
+
+<ParamField path="clk_polarity" type="spi_clk_polarity_t" required>
+  CPOL selection.
+</ParamField>
+
+<ParamField path="mode_fault" type="spi_mode_fault_t">
+  Enable or disable mode fault detection.
+</ParamField>
+
+<ParamField path="bit_order" type="spi_bit_order_t">
+  MSB or LSB first.
+</ParamField>
+
+<ParamField path="rxi_irq / txi_irq / tei_irq / eri_irq" type="IRQn_Type">
+  IRQ numbers assigned by the Smart Configurator.
+</ParamField>
+
+<ParamField path="rxi_ipl / txi_ipl / tei_ipl / eri_ipl" type="uint8_t">
+  Interrupt priorities for each IRQ.
+</ParamField>
+
+<ParamField path="p_transfer_tx" type="transfer_instance_t const *">
+  Optional DTC/DMAC transfer for TX. Set to `NULL` if unused.
+</ParamField>
+
+<ParamField path="p_transfer_rx" type="transfer_instance_t const *">
+  Optional DTC/DMAC transfer for RX. Set to `NULL` if unused.
+</ParamField>
+
+<ParamField path="p_callback" type="void (*)(spi_callback_args_t *)">
+  User callback function invoked on transfer completion or error.
+</ParamField>
+
+<ParamField path="p_context" type="void *">
+  Opaque pointer passed to the callback.
+</ParamField>
+
+<ParamField path="p_extend" type="void const *">
+  Driver-specific extended configuration (e.g., `spi_extended_cfg_t` for RSPI). `NULL` for defaults.
+</ParamField>
+
+---
+
+### `spi_callback_args_t`
+
+<ParamField path="channel" type="uint32_t">
+  Hardware channel number.
+</ParamField>
+
+<ParamField path="event" type="spi_event_t">
+  The event that triggered the callback.
+</ParamField>
+
+<ParamField path="p_context" type="void *">
+  User context pointer from `spi_cfg_t`.
+</ParamField>
+
+---
+
+## API — `spi_api_t`
+
+### `open`
+
+```c
+fsp_err_t (* open)(spi_ctrl_t * p_ctrl, spi_cfg_t const * const p_cfg);
+```
+
+Configures and enables the SPI hardware. Must be called before any transfer. Returns `FSP_ERR_ALREADY_OPEN` if already open.
+
+### `read`
+
+```c
+fsp_err_t (* read)(spi_ctrl_t * const p_ctrl, void * p_dest,
+                   uint32_t const length, spi_bit_width_t const bit_width);
+```
+
+Starts a half-duplex receive operation. Dummy data is clocked out on MOSI. `p_dest` must remain valid until `SPI_EVENT_TRANSFER_COMPLETE` fires.
+
+### `write`
+
+```c
+fsp_err_t (* write)(spi_ctrl_t * const p_ctrl, void const * p_src,
+                    uint32_t const length, spi_bit_width_t const bit_width);
+```
+
+Starts a half-duplex transmit operation. Received bytes are discarded.
+
+### `writeRead`
+
+```c
+fsp_err_t (* writeRead)(spi_ctrl_t * const p_ctrl, void const * p_src,
+                        void * p_dest, uint32_t const length,
+                        spi_bit_width_t const bit_width);
+```
+
+Full-duplex simultaneous transmit and receive. Both `p_src` and `p_dest` must remain valid until the transfer completes.
+
+### `callbackSet`
+
+```c
+fsp_err_t (* callbackSet)(spi_ctrl_t * const p_ctrl,
+                          void (* p_callback)(spi_callback_args_t *),
+                          void * const p_context,
+                          spi_callback_args_t * const p_callback_memory);
+```
+
+Registers a new callback at runtime.
+
+### `close`
+
+```c
+fsp_err_t (* close)(spi_ctrl_t * const p_ctrl);
+```
+
+Disables the SPI hardware and releases the channel.
+
+---
+
+## SPI Master Transfer Example
+
+```c
+#include "r_spi.h"
+
+spi_instance_ctrl_t  g_spi_ctrl;
+volatile bool        g_transfer_done = false;
+
+static void spi_callback(spi_callback_args_t * p_args)
+{
+    if (SPI_EVENT_TRANSFER_COMPLETE == p_args->event)
+    {
+        g_transfer_done = true;
+    }
+}
+
+const spi_cfg_t g_spi_cfg =
+{
+    .channel        = 0,
+    .operating_mode = SPI_MODE_MASTER,
+    .clk_phase      = SPI_CLK_PHASE_EDGE_ODD,    /* CPHA = 0 */
+    .clk_polarity   = SPI_CLK_POLARITY_LOW,      /* CPOL = 0 — Mode 0 */
+    .mode_fault     = SPI_MODE_FAULT_ERROR_ENABLE,
+    .bit_order      = SPI_BIT_ORDER_MSB_FIRST,
+    .p_callback     = spi_callback,
+    .p_context      = NULL,
+    .p_extend       = NULL,
+    /* IRQ numbers and priorities set by Smart Configurator */
+};
+
+void spi_master_example(void)
+{
+    fsp_err_t err;
+    uint8_t   tx_buf[4] = {0x01, 0x02, 0x03, 0x04};
+    uint8_t   rx_buf[4] = {0};
+
+    err = R_SPI_Open(&g_spi_ctrl, &g_spi_cfg);
+    if (FSP_SUCCESS != err) { return; }
+
+    /* Full-duplex transfer: send 4 bytes, simultaneously receive 4 bytes */
+    g_transfer_done = false;
+    err = R_SPI_WriteRead(&g_spi_ctrl, tx_buf, rx_buf, 4, SPI_BIT_WIDTH_8_BITS);
+    if (FSP_SUCCESS != err) { R_SPI_Close(&g_spi_ctrl); return; }
+
+    /* Wait for completion (in a real application, use an RTOS event or flag) */
+    while (!g_transfer_done) { /* yield / sleep */ }
+
+    /* Process rx_buf … */
+
+    R_SPI_Close(&g_spi_ctrl);
+}
+```
+
+<Tip>
+  Assert the chip-select (CS) pin using `R_IOPORT_PinWrite()` before calling `writeRead()` and de-assert it after `SPI_EVENT_TRANSFER_COMPLETE` fires. FSP does not manage CS automatically; this gives you full control over multi-byte transactions.
+</Tip>

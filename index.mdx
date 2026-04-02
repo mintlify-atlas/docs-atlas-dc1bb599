@@ -1,97 +1,69 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Renesas FSP Documentation"
+description: "Flexible Software Package for the Renesas RA MCU Family — production-ready HAL drivers, middleware stacks, and RTOS integration."
 ---
 
-## Setting up
+The Flexible Software Package (FSP) is Renesas's next-generation software platform for the RA MCU family. FSP provides best-in-class HAL drivers, RTOS integration, and portable middleware stacks for building secure, connected embedded applications.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install FSP with e² studio and run your first project in minutes
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Supported Hardware" icon="microchip" href="/supported-hardware">
+    Browse the full list of supported RA MCU kits and variants
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Peripheral Drivers" icon="plug" href="/drivers/communication">
+    UART, SPI, I2C, USB, CAN FD, Ethernet, and more
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="API Reference" icon="code" href="/api/common">
+    Full API reference for all HAL interfaces and middleware
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## What is FSP?
 
-Everything you need to create world-class documentation.
+FSP enables rapid development on Renesas RA microcontrollers by providing:
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+- **HAL drivers** with a consistent, interface-based API across all RA MCU variants
+- **Middleware stacks** for networking (LwIP, NetX Duo), security (MbedTLS, RSIP), file systems (LittleFS, FileX), and more
+- **RTOS integration** with FreeRTOS and Eclipse ThreadX (formerly Azure RTOS)
+- **Motor control** middleware for vector control, sensorless, and encoder-based motor systems
+- **e² studio IDE** with RASC configurator for visual peripheral setup and code generation
 
-## Need inspiration?
+## Get started
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<Steps>
+  <Step title="Install e² studio with FSP">
+    Download the FSP + e² studio installer from the [latest release](https://github.com/renesas/fsp/releases/tag/v6.4.0). This bundles the IDE, FSP packs, GCC/LLVM toolchains, and all required tools.
+  </Step>
+  <Step title="Create a new RA project">
+    Open e² studio, go to **File → New → C/C++ Project**, and select **Renesas RA** in the left pane. The RASC configurator will open for visual peripheral configuration.
+  </Step>
+  <Step title="Add FSP modules">
+    In the RASC **Stacks** tab, add the HAL drivers or middleware modules you need. RASC generates initialization code and pin configurations automatically.
+  </Step>
+  <Step title="Build and debug">
+    Compile your project with the built-in GCC or LLVM toolchain and flash it to your RA kit using the integrated J-Link debugger support.
+  </Step>
+</Steps>
+
+<CardGroup cols={3}>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Understand the FSP layered software architecture
+  </Card>
+  <Card title="BSP" icon="server" href="/concepts/bsp">
+    Board support package and MCU-specific initialization
+  </Card>
+  <Card title="HAL Drivers" icon="sliders" href="/concepts/hal-drivers">
+    Interface-based hardware abstraction layer
+  </Card>
+  <Card title="Middleware" icon="layer-group" href="/concepts/middleware">
+    RTOS, networking, security, and more
+  </Card>
+  <Card title="Development Guide" icon="book" href="/guides/project-setup">
+    Project setup, configurator, and TrustZone
+  </Card>
+  <Card title="Contributing" icon="code-pull-request" href="/guides/contributing">
+    How to contribute code and report issues
+  </Card>
+</CardGroup>

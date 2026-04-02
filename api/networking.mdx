@@ -1,0 +1,265 @@
+---
+title: "Networking APIs"
+description: "WiFi, Ethernet, LwIP, NetX Duo, and AWS IoT integration APIs for Renesas FSP."
+---
+
+## Overview
+
+FSP provides several networking layers:
+
+| Layer | API / Module | Protocol |
+|---|---|---|
+| WiFi radio abstraction | `rm_wifi_api.h` | IEEE 802.11 |
+| Ethernet MAC | `r_ether_api.h` | IEEE 802.3 |
+| Ethernet PHY | `r_ether_phy_api.h` | 10/100 Mbps |
+| TCP/IP (open-source) | LwIP middleware | IPv4/IPv6, TCP, UDP |
+| TCP/IP (RTOS) | NetX Duo (Azure RTOS) | IPv4/IPv6, TLS, MQTT |
+| Cloud connectivity | FreeRTOS + coreMQTT | AWS IoT Core |
+| Communications abstraction | `rm_comms_api.h` | Serial (I2C, SPI, UART) |
+
+---
+
+## WiFi Interface — `rm_wifi_api.h`
+
+The WiFi interface is a function-based (not struct-pointer) API adapted from the AWS FreeRTOS `iot_wifi.h` interface. All functions use the `WIFI_` prefix and return `WIFIReturnCode_t`.
+
+### Return Code — `WIFIReturnCode_t`
+
+<ParamField path="eWiFiSuccess" type="0">
+  Operation succeeded.
+</ParamField>
+
+<ParamField path="eWiFiFailure" type="1">
+  Operation failed.
+</ParamField>
+
+<ParamField path="eWiFiTimeout" type="2">
+  Operation timed out.
+</ParamField>
+
+<ParamField path="eWiFiNotSupported" type="3">
+  Operation not supported by this WiFi module.
+</ParamField>
+
+---
+
+### Security — `WIFISecurity_t`
+
+| Value | Description |
+|---|---|
+| `eWiFiSecurityOpen` | Open network, no security |
+| `eWiFiSecurityWEP` | WEP (deprecated) |
+| `eWiFiSecurityWPA` | WPA |
+| `eWiFiSecurityWPA2` | WPA2 (most common) |
+| `eWiFiSecurityWPA2_ent` | WPA2 Enterprise (802.1X) |
+| `eWiFiSecurityWPA3` | WPA3 |
+
+---
+
+### Device Mode — `WIFIDeviceMode_t`
+
+| Value | Description |
+|---|---|
+| `eWiFiModeStation` | Station (client) mode |
+| `eWiFiModeAP` | Soft-AP (access point) mode |
+| `eWiFiModeP2P` | Peer-to-peer mode |
+| `eWiFiModeAPStation` | Concurrent AP + station (repeater) |
+
+---
+
+### Key Structures
+
+**`WIFINetworkParams_t`** — Connection parameters for `WIFI_ConnectAP()`.
+
+<ParamField path="ucSSID[wificonfigMAX_SSID_LEN]" type="uint8_t[]">
+  SSID as a binary byte array (not a C string).
+</ParamField>
+
+<ParamField path="ucSSIDLength" type="uint8_t">
+  Length of the SSID in bytes.
+</ParamField>
+
+<ParamField path="xSecurity" type="WIFISecurity_t">
+  Security protocol.
+</ParamField>
+
+<ParamField path="xPassword.xWPA" type="WIFIWPAPassphrase_t">
+  WPA/WPA2/WPA3 passphrase (8–64 characters).
+</ParamField>
+
+<ParamField path="ucChannel" type="uint8_t">
+  Preferred RF channel (0 = any).
+</ParamField>
+
+---
+
+**`WIFIScanResult_t`** — One entry in a scan result list.
+
+<ParamField path="ucSSID[wificonfigMAX_SSID_LEN]" type="uint8_t[]">
+  SSID of the discovered network.
+</ParamField>
+
+<ParamField path="ucBSSID[wificonfigMAX_BSSID_LEN]" type="uint8_t[]">
+  BSSID (MAC address of the AP).
+</ParamField>
+
+<ParamField path="xSecurity" type="WIFISecurity_t">
+  Security type of the discovered network.
+</ParamField>
+
+<ParamField path="cRSSI" type="int8_t">
+  Received signal strength in dBm.
+</ParamField>
+
+<ParamField path="ucChannel" type="uint8_t">
+  RF channel.
+</ParamField>
+
+---
+
+### Core WiFi Functions
+
+```c
+/* Power on and initialise the WiFi module */
+WIFIReturnCode_t WIFI_On(void);
+
+/* Connect to an access point */
+WIFIReturnCode_t WIFI_ConnectAP(const WIFINetworkParams_t * const pxNetworkParams);
+
+/* Disconnect from the current AP */
+WIFIReturnCode_t WIFI_Disconnect(void);
+
+/* Perform a blocking network scan (up to ucNumNetworks results) */
+WIFIReturnCode_t WIFI_Scan(WIFIScanResult_t * pxBuffer, uint8_t ucNumNetworks);
+
+/* Get current IP configuration (address, mask, gateway, DNS) */
+WIFIReturnCode_t WIFI_GetIPInfo(WIFIIPConfiguration_t * pxIPInfo);
+
+/* Get the module MAC address */
+WIFIReturnCode_t WIFI_GetMAC(uint8_t * pucMac);
+
+/* Resolve a hostname via DNS */
+WIFIReturnCode_t WIFI_GetHostIP(char * pcHost, uint8_t * pucIPAddr);
+
+/* Register an event handler for async events */
+WIFIReturnCode_t WIFI_RegisterEvent(WIFIEventType_t xEventType, WIFIEventHandler_t xHandler);
+```
+
+### Async WiFi Events — `WIFIEventType_t`
+
+| Event | Description |
+|---|---|
+| `eWiFiEventReady` | Module initialised or reset |
+| `eWiFiEventScanDone` | Async scan completed |
+| `eWiFiEventConnected` | Station connected to AP |
+| `eWiFiEventDisconnected` | Station disconnected |
+| `eWiFiEventIPReady` | DHCP lease obtained |
+| `eWiFiEventAPStateChanged` | Soft-AP state changed |
+| `eWiFiEventWPSSuccess` | WPS pairing succeeded |
+
+### Available WiFi Module Instances
+
+| Instance | Module |
+|---|---|
+| `rm_wifi_onchip_silex` | Silex SX-ULPAN-2401 companion chip |
+| `rm_wifi_da16xxx` | Renesas DA16200 / DA16600 ultra-low-power WiFi SoC |
+
+---
+
+### WiFi Connection Example
+
+```c
+#include "rm_wifi_api.h"
+
+void wifi_connect_example(void)
+{
+    WIFIReturnCode_t  ret;
+    WIFINetworkParams_t params = {0};
+
+    ret = WIFI_On();
+    if (eWiFiSuccess != ret) { return; }
+
+    /* Specify target AP */
+    const char ssid[] = "MyNetwork";
+    const char pass[] = "MyPassword";
+    memcpy(params.ucSSID, ssid, strlen(ssid));
+    params.ucSSIDLength  = (uint8_t) strlen(ssid);
+    params.xSecurity     = eWiFiSecurityWPA2;
+    memcpy(params.xPassword.xWPA.cPassphrase, pass, strlen(pass));
+    params.xPassword.xWPA.ucLength = (uint8_t) strlen(pass);
+
+    ret = WIFI_ConnectAP(&params);
+    if (eWiFiSuccess != ret) { return; }
+
+    WIFIIPConfiguration_t ip_info = {0};
+    WIFI_GetIPInfo(&ip_info);
+    /* ip_info.xIPAddress.ulAddress[0] contains the IPv4 address in network byte order */
+}
+```
+
+---
+
+## LwIP Integration
+
+FSP ships LwIP as a middleware component. The integration provides:
+
+- A network interface driver (`ethernetif.c`) that bridges `r_ether_api.h` to LwIP's `netif` abstraction.
+- FreeRTOS task for the LwIP tcpip thread.
+- DHCP client enabled by default.
+
+To use LwIP, add the `lwip` and `r_ether` components in the Smart Configurator and configure the MAC address and IP settings in `lwipopts.h`.
+
+```c
+#include "lwip/sockets.h"
+#include "lwip/netdb.h"
+
+/* Standard BSD socket API is available once LwIP is initialised */
+int sock = socket(AF_INET, SOCK_STREAM, 0);
+```
+
+---
+
+## NetX Duo Integration (Azure RTOS)
+
+NetX Duo is available as a middleware component for applications using Azure RTOS (ThreadX). FSP provides:
+
+- `nx_renesas_ether` — NetX Duo Ethernet driver for `r_ether`.
+- `nx_renesas_wifi` — NetX Duo WiFi driver for `rm_wifi`.
+- `nxd_mqtt_client` — MQTT 3.1.1 client over TLS.
+- `nxd_tls` — NetX Secure TLS 1.3.
+
+NetX Duo uses a packet pool (`NX_PACKET_POOL`) and thread model instead of the BSD socket API.
+
+---
+
+## AWS IoT Integration
+
+FSP supports connection to AWS IoT Core using the **coreMQTT** library bundled with FreeRTOS:
+
+| Module | Description |
+|---|---|
+| `rm_mqtt_onchip_da16xxx` | MQTT client running on the DA16XXX co-processor |
+| coreMQTT + LwIP | MQTT over TCP/TLS on the RA host CPU |
+| corePKCS11 + RSIP | Hardware-backed private key storage |
+
+### AWS IoT Connection Flow
+
+```c
+/* 1. Connect WiFi (see above) */
+/* 2. Resolve AWS IoT endpoint via DNS */
+/* 3. Establish TLS session using RSIP hardware crypto */
+/* 4. MQTT connect with client certificate and private key from secure element */
+/* 5. Publish / subscribe topics */
+```
+
+<Tip>
+  Use the DA16XXX co-processor (via `rm_mqtt_onchip_da16xxx`) when the RA host CPU should remain in low-power sleep while the DA16XXX maintains the MQTT connection. The DA16XXX handles the TCP/TLS/MQTT stack autonomously and wakes the host only when a message arrives.
+</Tip>
+
+---
+
+## Communications Abstraction — `rm_comms_api.h`
+
+`rm_comms_api.h` provides a bus-agnostic interface (I2C, SPI, or UART) used by sensor middleware layers (`rm_hs300x`, `rm_zmod4xxx`, etc.) to communicate without knowing the underlying transport.
+
+The communications module maps to a concrete instance at configuration time via the Smart Configurator, allowing the same sensor driver code to run over I2C or SPI without modification.

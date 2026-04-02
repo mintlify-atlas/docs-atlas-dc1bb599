@@ -1,0 +1,394 @@
+---
+title: "ADC Interface"
+description: "Analog-to-Digital Converter API for Renesas FSP, covering single scan, group scan, continuous scan, and hardware trigger modes."
+---
+
+## Overview
+
+The ADC interface (`r_adc_api.h`) provides a common abstraction for all ADC HAL drivers in FSP. It supports:
+
+- Single-scan, group-scan, and continuous-scan modes
+- Software and hardware (ELC) triggers
+- Resolutions from 8 to 24 bits depending on the device
+- Temperature sensor and internal reference voltage channels
+- Window comparator (threshold crossing) notifications
+- DTC/DMAC result transfer via `infoGet()`
+
+```c
+#include "r_adc_api.h"
+```
+
+### Available Instances
+
+| Instance header | Peripheral |
+|---|---|
+| `r_adc.h` | ADC (12-bit successive-approximation, most RA series) |
+| `r_adc_b.h` | ADC_B (multi-channel ADC on RA6T2/RA4T1/RA8T1) |
+| `r_adc_d.h` | ADC_D (differential ADC, RA4C1) |
+| `r_sdadc.h` | SDADC (24-bit sigma-delta ADC, RA2A1) |
+
+---
+
+## Enumerations
+
+### `adc_event_t`
+
+Event codes passed to the user callback.
+
+<ParamField path="ADC_EVENT_SCAN_COMPLETE" type="0">
+  Normal scan (single scan or group A) has completed.
+</ParamField>
+
+<ParamField path="ADC_EVENT_SCAN_COMPLETE_GROUP_B" type="1">
+  Group B scan has completed.
+</ParamField>
+
+<ParamField path="ADC_EVENT_SCAN_COMPLETE_GROUP_C" type="2">
+  Group C scan has completed.
+</ParamField>
+
+<ParamField path="ADC_EVENT_CALIBRATION_COMPLETE" type="3">
+  Calibration (if requested via `calibrate()`) has finished.
+</ParamField>
+
+<ParamField path="ADC_EVENT_CONVERSION_COMPLETE" type="4">
+  A single-channel conversion is complete.
+</ParamField>
+
+<ParamField path="ADC_EVENT_CONVERSION_ERROR" type="6">
+  A scan error occurred.
+</ParamField>
+
+<ParamField path="ADC_EVENT_OVERFLOW" type="7">
+  An overflow occurred in the ADC data register.
+</ParamField>
+
+<ParamField path="ADC_EVENT_LIMIT_CLIP" type="8">
+  Limiter clipping occurred.
+</ParamField>
+
+<ParamField path="ADC_EVENT_WINDOW_COMPARE_A" type="11">
+  Window comparator A condition was met.
+</ParamField>
+
+<ParamField path="ADC_EVENT_WINDOW_COMPARE_B" type="12">
+  Window comparator B condition was met.
+</ParamField>
+
+<ParamField path="ADC_EVENT_ZERO_CROSS_DETECTION" type="13">
+  Zero-cross detection interrupt (SDADC only).
+</ParamField>
+
+---
+
+### `adc_mode_t`
+
+<ParamField path="ADC_MODE_SINGLE_SCAN" type="0">
+  Convert the configured channels once, then stop. Call `scanStart()` to trigger each conversion.
+</ParamField>
+
+<ParamField path="ADC_MODE_GROUP_SCAN" type="1">
+  Two independent trigger sources drive group A and group B, each with its own channel list.
+</ParamField>
+
+<ParamField path="ADC_MODE_CONTINUOUS_SCAN" type="2">
+  Convert the configured channels repeatedly, restarting immediately after each scan completes.
+</ParamField>
+
+---
+
+### `adc_resolution_t`
+
+<ParamField path="ADC_RESOLUTION_12_BIT" type="0">
+  12-bit resolution (0–4095).
+</ParamField>
+
+<ParamField path="ADC_RESOLUTION_10_BIT" type="1">
+  10-bit resolution.
+</ParamField>
+
+<ParamField path="ADC_RESOLUTION_8_BIT" type="2">
+  8-bit resolution.
+</ParamField>
+
+<ParamField path="ADC_RESOLUTION_14_BIT" type="3">
+  14-bit resolution (not available on all devices).
+</ParamField>
+
+<ParamField path="ADC_RESOLUTION_16_BIT" type="4">
+  16-bit resolution.
+</ParamField>
+
+<ParamField path="ADC_RESOLUTION_24_BIT" type="5">
+  24-bit resolution (SDADC only).
+</ParamField>
+
+---
+
+### `adc_trigger_t`
+
+<ParamField path="ADC_TRIGGER_SOFTWARE" type="0">
+  Software trigger: `scanStart()` begins the conversion. Not valid in group scan mode.
+</ParamField>
+
+<ParamField path="ADC_TRIGGER_SYNC_ELC" type="2">
+  Synchronous trigger via the Event Link Controller (ELC). Useful for timer-driven ADC sampling.
+</ParamField>
+
+<ParamField path="ADC_TRIGGER_ASYNC_EXTERNAL" type="3">
+  Asynchronous external trigger pin. Not valid in group scan mode.
+</ParamField>
+
+---
+
+### `adc_channel_t`
+
+Physical and virtual ADC channels. Channel availability is device-specific.
+
+| Channel | Value | Description |
+|---|---|---|
+| `ADC_CHANNEL_0` … `ADC_CHANNEL_28` | 0–28 | External analog input pins |
+| `ADC_CHANNEL_TEMPERATURE` | -3 | Internal temperature sensor |
+| `ADC_CHANNEL_VOLT` | -2 | Internal reference voltage (Vref) |
+| `ADC_CHANNEL_DUPLEX` | -4 | Data duplexing register |
+| `ADC_CHANNEL_DUPLEX_A` | 50 | Data duplexing register A |
+| `ADC_CHANNEL_DUPLEX_B` | 51 | Data duplexing register B |
+
+---
+
+### `adc_alignment_t`
+
+<ParamField path="ADC_ALIGNMENT_RIGHT" type="0">
+  Result right-aligned in the data register (standard).
+</ParamField>
+
+<ParamField path="ADC_ALIGNMENT_LEFT" type="1">
+  Result left-aligned. Ignored when addition averaging is enabled.
+</ParamField>
+
+---
+
+## Structures
+
+### `adc_cfg_t`
+
+Configuration passed to `adc_api_t::open`.
+
+<ParamField path="unit" type="uint16_t" required>
+  ADC unit index (0 or 1 on dual-ADC devices).
+</ParamField>
+
+<ParamField path="mode" type="adc_mode_t" required>
+  Scan mode: single, group, or continuous.
+</ParamField>
+
+<ParamField path="resolution" type="adc_resolution_t" required>
+  Conversion resolution.
+</ParamField>
+
+<ParamField path="alignment" type="adc_alignment_t">
+  Result alignment in the data register.
+</ParamField>
+
+<ParamField path="trigger" type="adc_trigger_t">
+  Default scan trigger source.
+</ParamField>
+
+<ParamField path="scan_end_irq / scan_end_b_irq / scan_end_c_irq" type="IRQn_Type">
+  Scan-end IRQ numbers for group A, B, and C.
+</ParamField>
+
+<ParamField path="scan_end_ipl / scan_end_b_ipl / scan_end_c_ipl" type="uint8_t">
+  Interrupt priorities for scan-end events.
+</ParamField>
+
+<ParamField path="p_callback" type="void (*)(adc_callback_args_t *)">
+  User callback for ADC events. Set to `NULL` if no interrupt is needed.
+</ParamField>
+
+<ParamField path="p_context" type="void *">
+  User data pointer passed to the callback.
+</ParamField>
+
+<ParamField path="p_extend" type="void const *">
+  Driver-specific extended configuration (channel scan list, averaging, etc.).
+</ParamField>
+
+---
+
+### `adc_callback_args_t`
+
+<ParamField path="unit" type="uint16_t">
+  ADC unit that generated the event.
+</ParamField>
+
+<ParamField path="event" type="adc_event_t">
+  The event that fired the callback.
+</ParamField>
+
+<ParamField path="channel" type="adc_channel_t">
+  Channel of the most recent conversion result.
+</ParamField>
+
+<ParamField path="channel_mask" type="uint64_t">
+  Bitmask of channels with completed conversions (r_adc_b and r_sdadc_b only).
+</ParamField>
+
+<ParamField path="group_mask" type="adc_group_mask_t">
+  Group mask for the completed scan.
+</ParamField>
+
+<ParamField path="p_context" type="void *">
+  User context from `adc_cfg_t`.
+</ParamField>
+
+---
+
+## API — `adc_api_t`
+
+### `open`
+
+```c
+fsp_err_t (* open)(adc_ctrl_t * const p_ctrl, adc_cfg_t const * const p_cfg);
+```
+
+Powers up the ADC, sets the operating mode, trigger source, and interrupt priority. Peripheral clocks and ADC pins must be configured before calling this function (handled by the Smart Configurator).
+
+### `scanCfg`
+
+```c
+fsp_err_t (* scanCfg)(adc_ctrl_t * const p_ctrl, void const * const p_extend);
+```
+
+Configures the channel scan list, sample-and-hold time, averaging, window comparators, and other scan-specific settings. `p_extend` points to a driver-specific scan configuration structure (e.g., `adc_channel_cfg_t`).
+
+### `scanStart`
+
+```c
+fsp_err_t (* scanStart)(adc_ctrl_t * const p_ctrl);
+```
+
+For software-triggered modes: starts a conversion. For hardware-triggered modes: arms the hardware trigger.
+
+### `scanStop`
+
+```c
+fsp_err_t (* scanStop)(adc_ctrl_t * const p_ctrl);
+```
+
+Stops an ongoing scan (software trigger) or disables the hardware trigger.
+
+### `scanStatusGet`
+
+```c
+fsp_err_t (* scanStatusGet)(adc_ctrl_t * const p_ctrl, adc_status_t * p_status);
+```
+
+Returns the current ADC state (`ADC_STATE_IDLE`, `ADC_STATE_SCAN_IN_PROGRESS`, or `ADC_STATE_CALIBRATION_IN_PROGRESS`).
+
+### `read`
+
+```c
+fsp_err_t (* read)(adc_ctrl_t * const p_ctrl, adc_channel_t const reg_id,
+                   uint16_t * const p_data);
+```
+
+Reads the most recent conversion result for `reg_id` into a 16-bit variable.
+
+### `read32`
+
+```c
+fsp_err_t (* read32)(adc_ctrl_t * const p_ctrl, adc_channel_t const reg_id,
+                     uint32_t * const p_data);
+```
+
+Reads a 32-bit result (for devices with 24-bit ADCs or averaging result registers).
+
+### `calibrate`
+
+```c
+fsp_err_t (* calibrate)(adc_ctrl_t * const p_ctrl, void const * p_extend);
+```
+
+Runs internal offset/gain calibration (not supported by all implementations). Completion is notified via `ADC_EVENT_CALIBRATION_COMPLETE`.
+
+### `infoGet`
+
+```c
+fsp_err_t (* infoGet)(adc_ctrl_t * const p_ctrl, adc_info_t * const p_adc_info);
+```
+
+Returns the base data register address, transfer count, ELC peripheral name, and temperature-sensor calibration data for setting up DTC/DMAC transfers.
+
+### `close`
+
+```c
+fsp_err_t (* close)(adc_ctrl_t * const p_ctrl);
+```
+
+Ends any in-progress scan, disables interrupts, and removes power from the ADC unit.
+
+---
+
+## ADC Single-Scan Example
+
+```c
+#include "r_adc.h"
+
+adc_instance_ctrl_t  g_adc_ctrl;
+volatile bool        g_scan_done = false;
+
+static void adc_callback(adc_callback_args_t * p_args)
+{
+    if (ADC_EVENT_SCAN_COMPLETE == p_args->event)
+    {
+        g_scan_done = true;
+    }
+}
+
+const adc_cfg_t g_adc_cfg =
+{
+    .unit       = 0,
+    .mode       = ADC_MODE_SINGLE_SCAN,
+    .resolution = ADC_RESOLUTION_12_BIT,
+    .alignment  = ADC_ALIGNMENT_RIGHT,
+    .trigger    = ADC_TRIGGER_SOFTWARE,
+    .p_callback = adc_callback,
+    .p_context  = NULL,
+    .p_extend   = NULL,
+    /* Scan-end IRQ and priority set by Smart Configurator */
+};
+
+uint16_t adc_read_channel(adc_channel_t ch)
+{
+    fsp_err_t err;
+    uint16_t  result = 0;
+
+    err = R_ADC_Open(&g_adc_ctrl, &g_adc_cfg);
+    if (FSP_SUCCESS != err) { return 0; }
+
+    /* Configure scan to include the requested channel */
+    adc_channel_cfg_t ch_cfg = { .scan_mask = (1U << (uint32_t) ch) };
+    err = R_ADC_ScanCfg(&g_adc_ctrl, &ch_cfg);
+    if (FSP_SUCCESS != err) { goto cleanup; }
+
+    /* Start conversion */
+    g_scan_done = false;
+    err = R_ADC_ScanStart(&g_adc_ctrl);
+    if (FSP_SUCCESS != err) { goto cleanup; }
+
+    /* Wait for scan complete callback */
+    while (!g_scan_done) { /* yield */ }
+
+    /* Read result */
+    R_ADC_Read(&g_adc_ctrl, ch, &result);
+
+cleanup:
+    R_ADC_Close(&g_adc_ctrl);
+    return result;
+}
+```
+
+<Note>
+  The temperature sensor channel (`ADC_CHANNEL_TEMPERATURE`) requires enabling the sensor in the extended scan configuration (`adc_channel_cfg_t::temperature_sensor_mask`) before it can be sampled. Calibration data from `adc_info_t::slope_microvolts` and `calibration_data` is needed to convert raw counts to Celsius.
+</Note>

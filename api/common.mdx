@@ -1,0 +1,423 @@
+---
+title: "Common API"
+description: "Common error codes, version macros, and utility macros shared across all FSP modules."
+---
+
+## Overview
+
+`fsp_common_api.h` is the foundation header included by every FSP module. It defines the universal error type `fsp_err_t`, utility macros, and C++ linkage guards. `fsp_version.h` provides the FSP pack version constants.
+
+```c
+#include "fsp_common_api.h"
+#include "fsp_version.h"
+```
+
+---
+
+## Version Macros
+
+Defined in `fsp_version.h`. The current FSP release is **6.4.0**.
+
+| Macro | Value | Description |
+|---|---|---|
+| `FSP_VERSION_MAJOR` | `6U` | Major version number |
+| `FSP_VERSION_MINOR` | `4U` | Minor version number |
+| `FSP_VERSION_PATCH` | `0U` | Patch version number |
+| `FSP_VERSION_BUILD` | `0U` | Build number (currently unused) |
+| `FSP_VERSION_STRING` | `"6.4.0"` | Human-readable version string |
+| `FSP_VERSION_BUILD_STRING` | `"Built with Renesas Advanced Flexible Software Package version 6.4.0"` | Full build identification string |
+
+### `fsp_pack_version_t`
+
+A union that allows reading the version as a single `uint32_t` or as individual byte fields.
+
+```c
+typedef union st_fsp_pack_version {
+    uint32_t version_id;
+    struct version_id_b_s {
+        uint8_t build;   ///< Build version
+        uint8_t patch;   ///< Patch version
+        uint8_t minor;   ///< Minor version
+        uint8_t major;   ///< Major version
+    } version_id_b;
+} fsp_pack_version_t;
+```
+
+**Usage:**
+
+```c
+fsp_pack_version_t version;
+R_FSP_VersionGet(&version);
+// version.version_id_b.major == 6
+// version.version_id_b.minor == 4
+```
+
+---
+
+## Utility Macros
+
+### `FSP_PARAMETER_NOT_USED`
+
+Suppresses compiler warnings about unused function parameters without generating any code.
+
+```c
+#define FSP_PARAMETER_NOT_USED(p)    (void) ((p))
+```
+
+**Usage:**
+
+```c
+void my_callback(uart_callback_args_t * p_args)
+{
+    FSP_PARAMETER_NOT_USED(p_args);
+    /* ... */
+}
+```
+
+### `FSP_HEADER` / `FSP_FOOTER`
+
+Guards that ensure FSP headers compile correctly from both C and C++ translation units. In C++ builds they expand to `extern "C" {` and `}` respectively; in C builds they expand to nothing.
+
+```c
+#define FSP_HEADER    FSP_CPP_HEADER
+#define FSP_FOOTER    FSP_CPP_FOOTER
+```
+
+Every FSP header file begins with `FSP_HEADER` and ends with `FSP_FOOTER`.
+
+### `FSP_SECURE_ARGUMENT`
+
+Expands to `NULL`. Used as a placeholder argument in Non-Secure Callable (NSC) function calls where a parameter is statically defined on the Secure side and is not passed by the Non-Secure caller.
+
+```c
+#define FSP_SECURE_ARGUMENT    (NULL)
+```
+
+---
+
+## Error Codes — `fsp_err_t`
+
+`fsp_err_t` is the return type for all FSP API functions. `FSP_SUCCESS` (0) indicates success; all other values indicate an error condition.
+
+```c
+typedef enum e_fsp_err { ... } fsp_err_t;
+```
+
+### Common Errors (0–99)
+
+<ParamField path="FSP_SUCCESS" type="0">
+  Operation completed successfully.
+</ParamField>
+
+<ParamField path="FSP_ERR_ASSERTION" type="1">
+  A critical assertion has failed.
+</ParamField>
+
+<ParamField path="FSP_ERR_INVALID_POINTER" type="2">
+  Pointer points to invalid memory location.
+</ParamField>
+
+<ParamField path="FSP_ERR_INVALID_ARGUMENT" type="3">
+  Invalid input parameter.
+</ParamField>
+
+<ParamField path="FSP_ERR_INVALID_CHANNEL" type="4">
+  Selected channel does not exist.
+</ParamField>
+
+<ParamField path="FSP_ERR_INVALID_MODE" type="5">
+  Unsupported or incorrect mode.
+</ParamField>
+
+<ParamField path="FSP_ERR_UNSUPPORTED" type="6">
+  Selected mode not supported by this API.
+</ParamField>
+
+<ParamField path="FSP_ERR_NOT_OPEN" type="7">
+  Requested channel is not configured or API not open.
+</ParamField>
+
+<ParamField path="FSP_ERR_IN_USE" type="8">
+  Channel/peripheral is running/busy.
+</ParamField>
+
+<ParamField path="FSP_ERR_OUT_OF_MEMORY" type="9">
+  Allocate more memory in the driver's cfg.h.
+</ParamField>
+
+<ParamField path="FSP_ERR_HW_LOCKED" type="10">
+  Hardware is locked.
+</ParamField>
+
+<ParamField path="FSP_ERR_IRQ_BSP_DISABLED" type="11">
+  IRQ not enabled in BSP.
+</ParamField>
+
+<ParamField path="FSP_ERR_OVERFLOW" type="12">
+  Hardware overflow.
+</ParamField>
+
+<ParamField path="FSP_ERR_UNDERFLOW" type="13">
+  Hardware underflow.
+</ParamField>
+
+<ParamField path="FSP_ERR_ALREADY_OPEN" type="14">
+  Requested channel is already open in a different configuration.
+</ParamField>
+
+<ParamField path="FSP_ERR_APPROXIMATION" type="15">
+  Could not set value to exact result.
+</ParamField>
+
+<ParamField path="FSP_ERR_CLAMPED" type="16">
+  Value had to be limited for some reason.
+</ParamField>
+
+<ParamField path="FSP_ERR_INVALID_RATE" type="17">
+  Selected rate could not be met.
+</ParamField>
+
+<ParamField path="FSP_ERR_ABORTED" type="18">
+  An operation was aborted.
+</ParamField>
+
+<ParamField path="FSP_ERR_NOT_ENABLED" type="19">
+  Requested operation is not enabled.
+</ParamField>
+
+<ParamField path="FSP_ERR_TIMEOUT" type="20">
+  Timeout error.
+</ParamField>
+
+<ParamField path="FSP_ERR_INVALID_BLOCKS" type="21">
+  Invalid number of blocks supplied.
+</ParamField>
+
+<ParamField path="FSP_ERR_INVALID_ADDRESS" type="22">
+  Invalid address supplied.
+</ParamField>
+
+<ParamField path="FSP_ERR_INVALID_SIZE" type="23">
+  Invalid size/length supplied for operation.
+</ParamField>
+
+<ParamField path="FSP_ERR_WRITE_FAILED" type="24">
+  Write operation failed.
+</ParamField>
+
+<ParamField path="FSP_ERR_ERASE_FAILED" type="25">
+  Erase operation failed.
+</ParamField>
+
+<ParamField path="FSP_ERR_INVALID_CALL" type="26">
+  Invalid function call.
+</ParamField>
+
+<ParamField path="FSP_ERR_INVALID_HW_CONDITION" type="27">
+  Detected hardware is in invalid condition.
+</ParamField>
+
+<ParamField path="FSP_ERR_INVALID_FACTORY_FLASH" type="28">
+  Factory flash is not available on this MCU.
+</ParamField>
+
+<ParamField path="FSP_ERR_INVALID_STATE" type="30">
+  API or command not valid in the current state.
+</ParamField>
+
+<ParamField path="FSP_ERR_NOT_ERASED" type="31">
+  Erase verification failed.
+</ParamField>
+
+<ParamField path="FSP_ERR_NOT_INITIALIZED" type="33">
+  Required initialization not complete.
+</ParamField>
+
+<ParamField path="FSP_ERR_NOT_FOUND" type="34">
+  The requested item could not be found.
+</ParamField>
+
+<ParamField path="FSP_ERR_NO_CALLBACK_MEMORY" type="35">
+  Non-secure callback memory not provided for non-secure callback.
+</ParamField>
+
+<ParamField path="FSP_ERR_BUFFER_EMPTY" type="36">
+  No data available in buffer.
+</ParamField>
+
+<ParamField path="FSP_ERR_INVALID_DATA" type="37">
+  Accuracy of data is not guaranteed.
+</ParamField>
+
+### RTOS Errors (100–101)
+
+| Code | Value | Description |
+|---|---|---|
+| `FSP_ERR_INTERNAL` | 100 | Internal error |
+| `FSP_ERR_WAIT_ABORTED` | 101 | Wait aborted |
+
+### UART Errors (200–206)
+
+| Code | Value | Description |
+|---|---|---|
+| `FSP_ERR_FRAMING` | 200 | Framing error occurs |
+| `FSP_ERR_BREAK_DETECT` | 201 | Break signal detects |
+| `FSP_ERR_PARITY` | 202 | Parity error occurs |
+| `FSP_ERR_RXBUF_OVERFLOW` | 203 | Receive queue overflow |
+| `FSP_ERR_QUEUE_UNAVAILABLE` | 204 | Can't open s/w queue |
+| `FSP_ERR_INSUFFICIENT_SPACE` | 205 | Not enough space in transmission circular buffer |
+| `FSP_ERR_INSUFFICIENT_DATA` | 206 | Not enough data in receive circular buffer |
+
+### SPI Errors (300–304)
+
+| Code | Value | Description |
+|---|---|---|
+| `FSP_ERR_TRANSFER_ABORTED` | 300 | The data transfer was aborted |
+| `FSP_ERR_MODE_FAULT` | 301 | Mode fault error |
+| `FSP_ERR_READ_OVERFLOW` | 302 | Read overflow |
+| `FSP_ERR_SPI_PARITY` | 303 | Parity error |
+| `FSP_ERR_OVERRUN` | 304 | Overrun error |
+
+### CGC (Clock Generation Circuit) Errors (400–411)
+
+| Code | Value | Description |
+|---|---|---|
+| `FSP_ERR_CLOCK_INACTIVE` | 400 | Inactive clock specified as system clock |
+| `FSP_ERR_CLOCK_ACTIVE` | 401 | Active clock source cannot be modified without stopping first |
+| `FSP_ERR_NOT_STABILIZED` | 403 | Clock has not stabilized after being turned on/off |
+| `FSP_ERR_PLL_SRC_INACTIVE` | 404 | PLL initialization attempted when PLL source is turned off |
+| `FSP_ERR_OSC_STOP_DET_ENABLED` | 405 | Illegal attempt to stop LOCO when oscillation stop is enabled |
+| `FSP_ERR_OSC_STOP_DETECTED` | 406 | The oscillation stop detection status flag is set |
+| `FSP_ERR_OSC_STOP_CLOCK_ACTIVE` | 407 | Attempt to clear oscillation stop detect status with PLL/MAIN_OSC active |
+| `FSP_ERR_CLKOUT_EXCEEDED` | 408 | Output on target clock pin exceeds maximum supported limit |
+| `FSP_ERR_USB_MODULE_ENABLED` | 409 | USB clock configure request with USB module enabled |
+| `FSP_ERR_HARDWARE_TIMEOUT` | 410 | A register read or write timed out |
+| `FSP_ERR_LOW_VOLTAGE_MODE` | 411 | Invalid clock setting attempted in low voltage mode |
+
+### Flash Errors (500–505)
+
+| Code | Value | Description |
+|---|---|---|
+| `FSP_ERR_PE_FAILURE` | 500 | Unable to enter programming mode |
+| `FSP_ERR_CMD_LOCKED` | 501 | Peripheral in command locked state |
+| `FSP_ERR_FCLK` | 502 | FCLK must be >= 4 MHz |
+| `FSP_ERR_INVALID_LINKED_ADDRESS` | 503 | Function or data linked at an invalid region of memory |
+| `FSP_ERR_BLANK_CHECK_FAILED` | 504 | Blank check operation failed |
+| `FSP_ERR_HUK_ZEROIZATION` | 505 | W-HUK zeroization is in progress |
+
+### Display / GLCD Errors (1000–1009)
+
+| Code | Value | Description |
+|---|---|---|
+| `FSP_ERR_CLOCK_GENERATION` | 1000 | Clock cannot be specified as system clock |
+| `FSP_ERR_INVALID_TIMING_SETTING` | 1001 | Invalid timing parameter |
+| `FSP_ERR_INVALID_LAYER_SETTING` | 1002 | Invalid layer parameter |
+| `FSP_ERR_INVALID_ALIGNMENT` | 1003 | Invalid memory alignment |
+| `FSP_ERR_INVALID_GAMMA_SETTING` | 1004 | Invalid gamma correction parameter |
+| `FSP_ERR_INVALID_LAYER_FORMAT` | 1005 | Invalid color format in layer |
+| `FSP_ERR_INVALID_UPDATE_TIMING` | 1006 | Invalid timing for register update |
+| `FSP_ERR_INVALID_CLUT_ACCESS` | 1007 | Invalid access to CLUT entry |
+| `FSP_ERR_INVALID_FADE_SETTING` | 1008 | Invalid fade-in/fade-out setting |
+| `FSP_ERR_INVALID_BRIGHTNESS_SETTING` | 1009 | Invalid gamma correction parameter |
+
+### Peripheral / IP Errors (1400–1402)
+
+| Code | Value | Description |
+|---|---|---|
+| `FSP_ERR_IP_HARDWARE_NOT_PRESENT` | 1400 | Requested IP does not exist on this device |
+| `FSP_ERR_IP_UNIT_NOT_PRESENT` | 1401 | Requested unit does not exist on this device |
+| `FSP_ERR_IP_CHANNEL_NOT_PRESENT` | 1402 | Requested channel does not exist on this device |
+
+### USB Errors (1500–1506)
+
+| Code | Value | Description |
+|---|---|---|
+| `FSP_ERR_USB_FAILED` | 1500 | USB operation failed |
+| `FSP_ERR_USB_BUSY` | 1501 | USB is busy |
+| `FSP_ERR_USB_SIZE_SHORT` | 1502 | USB transfer size too short |
+| `FSP_ERR_USB_SIZE_OVER` | 1503 | USB transfer size too large |
+| `FSP_ERR_USB_NOT_OPEN` | 1504 | USB module not open |
+| `FSP_ERR_USB_NOT_SUSPEND` | 1505 | USB not suspended |
+| `FSP_ERR_USB_PARAMETER` | 1506 | Invalid USB parameter |
+
+### Ethernet Errors (4000–4006)
+
+| Code | Value | Description |
+|---|---|---|
+| `FSP_ERR_ETHER_ERROR_NO_DATA` | 4000 | No data in receive buffer |
+| `FSP_ERR_ETHER_ERROR_LINK` | 4001 | Error in auto-negotiation |
+| `FSP_ERR_ETHER_ERROR_MAGIC_PACKET_MODE` | 4002 | Magic packet being detected, TX/RX not enabled |
+| `FSP_ERR_ETHER_ERROR_TRANSMIT_BUFFER_FULL` | 4003 | Transmit buffer is not empty |
+| `FSP_ERR_ETHER_ERROR_FILTERING` | 4004 | Multicast frame detected when filtering enabled |
+| `FSP_ERR_ETHER_ERROR_PHY_COMMUNICATION` | 4005 | Error in PHY communication |
+| `FSP_ERR_ETHER_RECEIVE_BUFFER_ACTIVE` | 4006 | Receive buffer is active |
+
+### WiFi Errors (70000–70016)
+
+| Code | Value | Description |
+|---|---|---|
+| `FSP_ERR_WIFI_CONFIG_FAILED` | 70000 | WiFi module configuration failed |
+| `FSP_ERR_WIFI_INIT_FAILED` | 70001 | WiFi module initialization failed |
+| `FSP_ERR_WIFI_TRANSMIT_FAILED` | 70002 | Transmission failed |
+| `FSP_ERR_WIFI_FAILED` | 70004 | WiFi failed |
+| `FSP_ERR_WIFI_AP_NOT_CONNECTED` | 70006 | WiFi module not connected to access point |
+
+### Crypto / SCE Errors (0x10000–0x10017)
+
+| Code | Value | Description |
+|---|---|---|
+| `FSP_ERR_CRYPTO_CONTINUE` | 0x10000 | Continue executing function |
+| `FSP_ERR_CRYPTO_SCE_RESOURCE_CONFLICT` | 0x10001 | Hardware resource busy |
+| `FSP_ERR_CRYPTO_SCE_FAIL` | 0x10002 | Internal I/O buffer is not empty |
+| `FSP_ERR_CRYPTO_SCE_RETRY` | 0x10004 | Retry |
+| `FSP_ERR_CRYPTO_SCE_VERIFY_FAIL` | 0x10005 | Verify failed |
+| `FSP_ERR_CRYPTO_SCE_ALREADY_OPEN` | 0x10006 | HW SCE module is already opened |
+| `FSP_ERR_CRYPTO_NOT_OPEN` | 0x10007 | Hardware module is not initialized |
+| `FSP_ERR_CRYPTO_UNKNOWN` | 0x10008 | Unknown error occurred |
+| `FSP_ERR_CRYPTO_NOT_IMPLEMENTED` | 0x1000a | Algorithm/size not implemented |
+| `FSP_ERR_CRYPTO_AUTHENTICATION_FAILED` | 0x10011 | Authentication failed |
+| `FSP_ERR_CRYPTO_INSTALL_KEY_FAILED` | 0x10010 | Specified input key is invalid |
+
+### Crypto / RSIP Errors (0x10100–0x101ff)
+
+| Code | Value | Description |
+|---|---|---|
+| `FSP_ERR_CRYPTO_RSIP_RESOURCE_CONFLICT` | 0x10100 | Hardware resource is busy |
+| `FSP_ERR_CRYPTO_RSIP_FATAL` | 0x10101 | Hardware fatal error or unexpected return |
+| `FSP_ERR_CRYPTO_RSIP_FAIL` | 0x10102 | Internal error |
+| `FSP_ERR_CRYPTO_RSIP_KEY_SET_FAIL` | 0x10103 | Input key type is illegal |
+| `FSP_ERR_CRYPTO_RSIP_AUTHENTICATION` | 0x10104 | Authentication failed |
+| `FSP_ERR_CRYPTO_RSIP_DLMS_ERROR` | 0x10105 | An error occurred during DLMS processing |
+
+### SD/MMC Errors (40000–40007)
+
+| Code | Value | Description |
+|---|---|---|
+| `FSP_ERR_CARD_INIT_FAILED` | 40000 | SD card or eMMC failed to initialize |
+| `FSP_ERR_CARD_NOT_INSERTED` | 40001 | SD card not installed |
+| `FSP_ERR_DEVICE_BUSY` | 40002 | Device is holding DAT0 low or another operation ongoing |
+| `FSP_ERR_CARD_NOT_INITIALIZED` | 40004 | SD card was removed |
+| `FSP_ERR_CARD_WRITE_PROTECTED` | 40005 | Media is write protected |
+| `FSP_ERR_TRANSFER_BUSY` | 40006 | Transfer in progress |
+| `FSP_ERR_RESPONSE` | 40007 | Card did not respond or responded with an error |
+
+---
+
+## Error Handling Pattern
+
+All FSP API functions return `fsp_err_t`. The standard pattern is:
+
+```c
+fsp_err_t err = FSP_SUCCESS;
+
+err = R_SCI_UART_Open(&g_uart_ctrl, &g_uart_cfg);
+if (FSP_SUCCESS != err)
+{
+    /* Handle error */
+    return err;
+}
+```
+
+<Note>
+  `FSP_SUCCESS` is defined as `0`. You can use `if (err)` as a shorthand for `if (err != FSP_SUCCESS)`, but the explicit comparison improves readability in production code.
+</Note>

@@ -1,0 +1,155 @@
+---
+title: "TrustZone development"
+description: "Develop Secure and Non-Secure applications for Cortex-M33 RA MCUs using ARM TrustZone and FSP."
+keywords: ["TrustZone", "Cortex-M33", "Secure", "Non-Secure", "NSC", "TF-M", "RA6M4", "RA6M5", "RA8M1", "rm_tz_context"]
+---
+
+## ARM TrustZone on RA MCUs
+
+ARM TrustZone for Cortex-M33 provides hardware-enforced isolation between a **Secure** world and a **Non-Secure** world on a single MCU. The processor enforces boundaries between the two worlds at the hardware level — Non-Secure code cannot directly read Secure memory or call Secure functions unless explicitly allowed.
+
+Renesas RA MCUs with a Cortex-M33 core and TrustZone support include:
+
+- RA6M4, RA6M5
+- RA8M1, RA8M2, RA8D1, RA8D2, RA8T1
+- RA4M2, RA4M3
+
+FSP provides full support for TrustZone development, including memory partitioning, Non-Secure Callable (NSC) function export, context saving, and Trusted Firmware-M (TF-M) integration.
+
+## Project structure
+
+A TrustZone FSP application consists of two separate projects that are built and linked independently:
+
+| Project | Description |
+|---------|-------------|
+| **Secure project** | Runs in the Secure world. Initializes hardware, configures TrustZone memory partitions, and exports NSC functions to the Non-Secure world. |
+| **Non-Secure project** | Runs in the Non-Secure world. Contains the main application logic and calls Secure services through the NSC interface. |
+
+In e² studio, both projects typically live in the same workspace and share a common build dependency: the Secure project must be built first so its import library (`<secure_project>_s_CMSE_Lib.o`) is available to link into the Non-Secure project.
+
+<Warning>
+  Secure project code has unrestricted access to all memory and peripherals. Keep the Secure world surface area small and well-audited. Only expose the minimum set of functions through the NSC interface that the Non-Secure application requires.
+</Warning>
+
+## Memory partitioning
+
+Memory partitions are configured in RASC using the **Partition** settings. You define which flash and SRAM regions belong to the Secure world, and the processor's SAU (Security Attribution Unit) and IDAU enforce those boundaries at runtime.
+
+Typical partition layout:
+
+```text
+Flash (example, RA6M4 512 KB):
+  0x00000000 - 0x0003FFFF  Secure code and data   (256 KB)
+  0x00040000 - 0x0007FFFF  Non-Secure code          (256 KB)
+
+SRAM (example, RA6M4 256 KB):
+  0x20000000 - 0x2001FFFF  Secure SRAM             (128 KB)
+  0x20020000 - 0x2003FFFF  Non-Secure SRAM          (128 KB)
+```
+
+<Warning>
+  Partition boundaries must be aligned to the granularity required by the SAU on your specific RA device. Refer to the MCU hardware manual for alignment constraints. Misaligned partitions may leave Secure data readable from the Non-Secure world.
+</Warning>
+
+## TrustZone project setup
+
+<Steps>
+  <Step title="Create the Secure project">
+    In e² studio:
+    1. Click **File > New > C/C++ Project**.
+    2. Select **Renesas RA** in the left pane.
+    3. On the TrustZone page, select **Secure project**.
+    4. Complete the wizard to select your MCU and FSP version.
+  </Step>
+  <Step title="Configure memory partitions in RASC">
+    Open `configuration.xml` to launch RASC. Navigate to the **Partition** tab. Set the Secure and Non-Secure flash and SRAM boundaries to match your application's memory requirements.
+
+    RASC generates the partition configuration into the BSP startup code. The SAU is programmed at reset before any application code runs.
+  </Step>
+  <Step title="Implement NSC functions">
+    NSC (Non-Secure Callable) functions are the controlled gateway between the Non-Secure world and Secure services. Declare them with the `BSP_CMSE_NONSECURE_ENTRY` attribute and place them in the NSC memory region:
+
+    ```c
+    /* secure_functions.h - shared header included by both projects */
+    #include "bsp_api.h"
+
+    BSP_CMSE_NONSECURE_ENTRY void secure_led_on(void);
+    BSP_CMSE_NONSECURE_ENTRY int32_t secure_crypto_sign(const uint8_t * p_data, uint32_t length);
+    ```
+
+    ```c
+    /* secure_functions.c - compiled into the Secure project */
+    #include "secure_functions.h"
+
+    BSP_CMSE_NONSECURE_ENTRY void secure_led_on(void)
+    {
+        /* Validate any pointer arguments before dereferencing */
+        R_BSP_PinWrite(BSP_IO_PORT_04_PIN_00, BSP_IO_LEVEL_HIGH);
+    }
+    ```
+
+    <Warning>
+      Always validate pointer arguments passed from the Non-Secure world before dereferencing them in Secure code. Use `cmse_check_address_range()` to verify that a Non-Secure pointer does not point into Secure memory.
+    </Warning>
+  </Step>
+  <Step title="Build the Secure project">
+    Build the Secure project. The compiler produces a CMSE import library (`<project>_s_CMSE_Lib.o`) containing only the NSC function stubs — no Secure code or data. This file is safe to share with the Non-Secure project.
+  </Step>
+  <Step title="Create the Non-Secure project">
+    Create a second project in e² studio and select **Non-Secure project** in the wizard. Add the Secure project as a project reference so that the CMSE import library is linked automatically.
+  </Step>
+  <Step title="Call NSC functions from Non-Secure code">
+    Include the shared header and call NSC functions as if they were normal C functions:
+
+    ```c
+    #include "secure_functions.h"
+
+    void app_main(void)
+    {
+        /* Call into the Secure world through the NSC gateway */
+        secure_led_on();
+    }
+    ```
+
+    The Non-Secure project links against the CMSE import library and the CPU transitions to Secure state automatically on each call using the `SG` (Secure Gateway) instruction.
+  </Step>
+</Steps>
+
+## Context saving with `rm_tz_context`
+
+When an RTOS runs in the Non-Secure world and makes NSC calls, the FPU registers and other Secure state may not be saved automatically by the RTOS context switch. FSP provides the `rm_tz_context` module to handle this.
+
+Add `rm_tz_context` to the Secure project's stack in RASC. The module provides `R_TZ_CONTEXT_Save()` and `R_TZ_CONTEXT_Restore()` functions that the Non-Secure RTOS calls at context switch boundaries to preserve Secure state correctly.
+
+```c
+/* Called by the Non-Secure RTOS before a context switch */
+R_TZ_CONTEXT_Save(p_context_buffer);
+
+/* Called by the Non-Secure RTOS after a context switch */
+R_TZ_CONTEXT_Restore(p_context_buffer);
+```
+
+## Trusted Firmware-M (TF-M) integration
+
+For applications requiring a standardized PSA (Platform Security Architecture) Secure Processing Environment, FSP supports integration with [Trusted Firmware-M (TF-M)](https://www.trustedfirmware.org/projects/tf-m/).
+
+TF-M runs entirely in the Secure world and exposes PSA APIs (crypto, attestation, protected storage, firmware update) to the Non-Secure application. FSP's TF-M integration provides:
+
+- A pre-integrated TF-M port for supported RA MCUs.
+- RASC configuration support for TF-M partition settings.
+- A Non-Secure application template that calls PSA APIs through TF-M's NS interface library.
+
+<Note>
+  TF-M support is available for specific RA MCU variants. Check the FSP release notes for the list of TF-M-supported devices in your FSP version.
+</Note>
+
+## Next steps
+
+<Columns cols={2}>
+  <Card title="RA Smart Configurator" icon="sliders" href="/guides/configurator">
+    Configure memory partitions, peripherals, and stacks in RASC.
+  </Card>
+  <Card title="Security middleware" icon="lock" href="/middleware/security">
+    Explore FSP's cryptography, secure boot, and key management modules.
+  </Card>
+</Columns>

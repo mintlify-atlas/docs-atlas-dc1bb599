@@ -1,0 +1,449 @@
+---
+title: 'Communication drivers'
+description: 'UART, SPI, I2C, CAN, USB, Ethernet, and BLE peripheral drivers for the Renesas RA family.'
+keywords: ['UART', 'SPI', 'I2C', 'CAN', 'USB', 'Ethernet', 'BLE', 'FSP', 'Renesas RA']
+---
+
+The FSP communication drivers implement a common HAL API for each protocol. Each driver is bound to a hardware peripheral instance at compile time through a generated configuration structure. All drivers follow the same open/close/read/write lifecycle and deliver results asynchronously through a user-supplied callback.
+
+<CardGroup cols={2}>
+  <Card title="UART" icon="terminal">
+    Full-duplex async serial. Instances: `r_sci_uart`, `r_sci_b_uart`, `r_uarta`, `r_sau_uart`.
+  </Card>
+  <Card title="SPI" icon="arrows-left-right">
+    Synchronous serial, master/slave. Instances: `r_spi`, `r_spi_b`, `r_sci_spi`, `r_sci_b_spi`, `r_sau_spi`.
+  </Card>
+  <Card title="I2C / I3C" icon="network-wired">
+    Two-wire bus, master and slave roles. Instances: `r_iic_master`, `r_iic_b_master`, `r_sci_i2c`, `r_iic_slave`, `r_i3c`.
+  </Card>
+  <Card title="CAN / CAN FD" icon="car">
+    In-vehicle network. Instances: `r_can`, `r_canfd`, `r_canfdlite`.
+  </Card>
+  <Card title="USB" icon="usb">
+    Full/high-speed device and host. Instances: `r_usb_pcdc`, `r_usb_phid`, `r_usb_pmsc`, `r_usb_hcdc`, `r_usb_composite`.
+  </Card>
+  <Card title="Ethernet" icon="ethernet">
+    MAC + PHY drivers. Instances: `r_ether`, `r_ether_phy`, `r_rmac`.
+  </Card>
+</CardGroup>
+
+---
+
+<Tabs>
+  <Tab title="UART">
+
+## UART
+
+The UART interface provides interrupt-driven full-duplex communication with optional DTC/DMAC acceleration for bulk transfers.
+
+### Configuration structure
+
+`uart_cfg_t` is defined in `r_uart_api.h`:
+
+```c
+typedef struct st_uart_cfg
+{
+    uint8_t          channel;          /* Hardware channel number */
+    uart_data_bits_t data_bits;        /* UART_DATA_BITS_8, _7, or _9 */
+    uart_parity_t    parity;           /* UART_PARITY_OFF, _EVEN, _ODD, _ZERO */
+    uart_stop_bits_t stop_bits;        /* UART_STOP_BITS_1 or _2 */
+    uint8_t          rxi_ipl;          /* Receive interrupt priority */
+    IRQn_Type        rxi_irq;          /* Receive interrupt IRQ number */
+    uint8_t          txi_ipl;          /* Transmit interrupt priority */
+    IRQn_Type        txi_irq;          /* Transmit interrupt IRQ number */
+    uint8_t          tei_ipl;          /* Transmit-end interrupt priority */
+    IRQn_Type        tei_irq;          /* Transmit-end interrupt IRQ number */
+    uint8_t          eri_ipl;          /* Error interrupt priority */
+    IRQn_Type        eri_irq;          /* Error interrupt IRQ number */
+    transfer_instance_t const * p_transfer_rx; /* Optional DTC/DMAC for RX */
+    transfer_instance_t const * p_transfer_tx; /* Optional DTC/DMAC for TX */
+    void (* p_callback)(uart_callback_args_t * p_args); /* Callback function */
+    void       * p_context;            /* User context passed to callback */
+    void const * p_extend;             /* Driver-specific extension */
+} uart_cfg_t;
+```
+
+### Callback events
+
+| Event | Description |
+|---|---|
+| `UART_EVENT_RX_COMPLETE` | Requested read transfer finished |
+| `UART_EVENT_TX_COMPLETE` | All bytes transmitted on the wire |
+| `UART_EVENT_RX_CHAR` | Single byte received outside an active read |
+| `UART_EVENT_TX_DATA_EMPTY` | Last byte is transmitting; ready for more data |
+| `UART_EVENT_ERR_PARITY` | Parity error detected |
+| `UART_EVENT_ERR_FRAMING` | Framing error detected |
+| `UART_EVENT_ERR_OVERFLOW` | FIFO overflow |
+| `UART_EVENT_BREAK_DETECT` | Break condition detected |
+
+### UART initialization example
+
+The example below uses the `r_sci_uart` instance. The FSP configurator generates `g_uart0_ctrl`, `g_uart0_cfg`, and `g_uart0` for you.
+
+```c
+#include "r_sci_uart.h"
+
+/* Callback invoked from the UART ISR */
+void uart0_callback(uart_callback_args_t * p_args)
+{
+    switch (p_args->event)
+    {
+        case UART_EVENT_TX_COMPLETE:
+            /* Transmit finished – safe to reuse the TX buffer */
+            break;
+
+        case UART_EVENT_RX_COMPLETE:
+            /* Receive buffer is full */
+            break;
+
+        case UART_EVENT_RX_CHAR:
+            /* Single byte received: p_args->data holds the character */
+            break;
+
+        case UART_EVENT_ERR_FRAMING:
+        case UART_EVENT_ERR_PARITY:
+        case UART_EVENT_ERR_OVERFLOW:
+            /* Handle communication errors */
+            break;
+
+        default:
+            break;
+    }
+}
+
+void uart_example(void)
+{
+    fsp_err_t err;
+
+    /* Open the UART channel using the FSP-generated instance */
+    err = R_SCI_UART_Open(&g_uart0_ctrl, &g_uart0_cfg);
+    assert(FSP_SUCCESS == err);
+
+    /* Transmit a string – callback fires when complete */
+    uint8_t msg[] = "Hello, FSP!\r\n";
+    err = R_SCI_UART_Write(&g_uart0_ctrl, msg, sizeof(msg) - 1U);
+    assert(FSP_SUCCESS == err);
+
+    /* Start receiving 16 bytes – callback fires when buffer is full */
+    static uint8_t rx_buf[16];
+    err = R_SCI_UART_Read(&g_uart0_ctrl, rx_buf, sizeof(rx_buf));
+    assert(FSP_SUCCESS == err);
+}
+```
+
+<Note>
+The `p_transfer_tx` and `p_transfer_rx` fields in `uart_cfg_t` accept a DTC or DMAC transfer instance. When set, multi-byte reads and writes complete without per-byte interrupts, greatly reducing CPU load at high baud rates.
+</Note>
+
+### Available instances
+
+| Module | Peripheral | Notes |
+|---|---|---|
+| `r_sci_uart` | SCI (UART mode) | General-purpose, most RA devices |
+| `r_sci_b_uart` | SCI-B (UART mode) | Newer SCI-B peripheral variant |
+| `r_uarta` | UARTA | Low-power async serial |
+| `r_sau_uart` | SAU (UART mode) | Simple Async Unit on RL78-derived cores |
+
+  </Tab>
+  <Tab title="SPI">
+
+## SPI
+
+The SPI interface provides full-duplex synchronous serial communication. Both master and slave operating modes are supported.
+
+### Configuration structure
+
+`spi_cfg_t` is defined in `r_spi_api.h`:
+
+```c
+typedef struct st_spi_cfg
+{
+    uint8_t   channel;                   /* Channel number */
+    IRQn_Type rxi_irq;                   /* Receive Buffer Full IRQ */
+    IRQn_Type txi_irq;                   /* Transmit Buffer Empty IRQ */
+    IRQn_Type tei_irq;                   /* Transfer Complete IRQ */
+    IRQn_Type eri_irq;                   /* Error IRQ */
+    uint8_t   rxi_ipl;                   /* Receive interrupt priority */
+    uint8_t   txi_ipl;                   /* Transmit interrupt priority */
+    uint8_t   tei_ipl;                   /* Transfer complete interrupt priority */
+    uint8_t   eri_ipl;                   /* Error interrupt priority */
+    spi_mode_t         operating_mode;   /* SPI_MODE_MASTER or SPI_MODE_SLAVE */
+    spi_clk_phase_t    clk_phase;        /* Odd or even edge sampling */
+    spi_clk_polarity_t clk_polarity;     /* Clock idle low or high */
+    spi_mode_fault_t   mode_fault;       /* Mode fault error enable/disable */
+    spi_bit_order_t    bit_order;        /* MSB or LSB first */
+    transfer_instance_t const * p_transfer_tx; /* Optional DTC/DMAC for TX */
+    transfer_instance_t const * p_transfer_rx; /* Optional DTC/DMAC for RX */
+    void (* p_callback)(spi_callback_args_t * p_args); /* Callback function */
+    void       * p_context;             /* User context */
+    void const * p_extend;              /* Driver-specific extension */
+} spi_cfg_t;
+```
+
+### SPI clock modes
+
+| Mode | `clk_polarity` | `clk_phase` | Description |
+|---|---|---|---|
+| 0 | `SPI_CLK_POLARITY_LOW` | `SPI_CLK_PHASE_EDGE_ODD` | CPOL=0, CPHA=0 |
+| 1 | `SPI_CLK_POLARITY_LOW` | `SPI_CLK_PHASE_EDGE_EVEN` | CPOL=0, CPHA=1 |
+| 2 | `SPI_CLK_POLARITY_HIGH` | `SPI_CLK_PHASE_EDGE_ODD` | CPOL=1, CPHA=0 |
+| 3 | `SPI_CLK_POLARITY_HIGH` | `SPI_CLK_PHASE_EDGE_EVEN` | CPOL=1, CPHA=1 |
+
+### Master transfer example
+
+```c
+#include "r_spi.h"
+
+void spi_master_example(void)
+{
+    fsp_err_t err;
+
+    /* Open with the FSP-generated instance */
+    err = R_SPI_Open(&g_spi0_ctrl, &g_spi0_cfg);
+    assert(FSP_SUCCESS == err);
+
+    uint8_t tx_data[4] = {0x01, 0x02, 0x03, 0x04};
+    uint8_t rx_data[4] = {0};
+
+    /* Assert CS manually or configure via IOPORT */
+    R_IOPORT_PinWrite(&g_ioport_ctrl, SPI_CS_PIN, BSP_IO_LEVEL_LOW);
+
+    /* Full-duplex write+read in one call */
+    err = R_SPI_WriteRead(&g_spi0_ctrl,
+                          tx_data,
+                          rx_data,
+                          sizeof(tx_data),
+                          SPI_BIT_WIDTH_8_BITS);
+    assert(FSP_SUCCESS == err);
+
+    /* Wait for SPI_EVENT_TRANSFER_COMPLETE in callback before deasserting CS */
+}
+```
+
+<Tip>
+Use `R_SPI_Write` for transmit-only and `R_SPI_Read` for receive-only transfers. Use `R_SPI_WriteRead` for simultaneous full-duplex exchange.
+</Tip>
+
+### Available instances
+
+| Module | Peripheral | Notes |
+|---|---|---|
+| `r_spi` | RSPI | Hardware SPI with DMA support |
+| `r_spi_b` | SPI-B | Newer SPI peripheral variant |
+| `r_sci_spi` | SCI (SPI mode) | SCI channel used in clock-sync mode |
+| `r_sci_b_spi` | SCI-B (SPI mode) | SCI-B clock-sync mode |
+| `r_sau_spi` | SAU (SPI mode) | SAU channel in clock-sync mode |
+
+  </Tab>
+  <Tab title="I2C / I3C">
+
+## I2C master
+
+The I2C master interface supports Standard (100 kHz), Fast (400 kHz), Fast-Plus (1 MHz), and High-Speed (3.4 MHz) modes. Addressing can be 7-bit or 10-bit.
+
+### Configuration structure
+
+`i2c_master_cfg_t` is defined in `r_i2c_master_api.h`:
+
+```c
+typedef struct st_i2c_master_cfg
+{
+    uint8_t                channel;    /* Hardware channel */
+    i2c_master_rate_t      rate;       /* I2C_MASTER_RATE_STANDARD/_FAST/_FASTPLUS/_HIGHSPEED */
+    uint32_t               slave;      /* Target device address */
+    i2c_master_addr_mode_t addr_mode;  /* I2C_MASTER_ADDR_MODE_7BIT or _10BIT */
+    uint8_t                ipl;        /* Interrupt priority (shared for RXI/TXI/TEI/ERI) */
+    IRQn_Type              rxi_irq;
+    IRQn_Type              txi_irq;
+    IRQn_Type              tei_irq;
+    IRQn_Type              eri_irq;
+    transfer_instance_t const * p_transfer_tx; /* Optional DTC/DMAC for TX */
+    transfer_instance_t const * p_transfer_rx; /* Optional DTC/DMAC for RX */
+    void (* p_callback)(i2c_master_callback_args_t * p_args);
+    void       * p_context;
+    void const * p_extend;
+} i2c_master_cfg_t;
+```
+
+### Callback events
+
+| Event | Description |
+|---|---|
+| `I2C_MASTER_EVENT_TX_COMPLETE` | Write transfer completed successfully |
+| `I2C_MASTER_EVENT_RX_COMPLETE` | Read transfer completed successfully |
+| `I2C_MASTER_EVENT_ABORTED` | Transfer aborted (NACK or bus error) |
+| `I2C_MASTER_EVENT_START` | START condition sent |
+| `I2C_MASTER_EVENT_BYTE_ACK` | One byte sent or received |
+
+### Master open and register write example
+
+```c
+#include "r_iic_master.h"
+
+#define SENSOR_ADDR   (0x48U)   /* 7-bit address of target device */
+
+void i2c_master_example(void)
+{
+    fsp_err_t err;
+
+    /* Open the I2C master channel */
+    err = R_IIC_MASTER_Open(&g_i2c_master0_ctrl, &g_i2c_master0_cfg);
+    assert(FSP_SUCCESS == err);
+
+    /* Write two bytes to a configuration register.
+     * restart=false issues a STOP condition after the transfer. */
+    uint8_t write_data[2] = {0x01U, 0xC2U}; /* register address, value */
+    err = R_IIC_MASTER_Write(&g_i2c_master0_ctrl,
+                              write_data,
+                              sizeof(write_data),
+                              false);
+    assert(FSP_SUCCESS == err);
+
+    /* Read back 2 bytes from the device.
+     * restart=false issues a STOP condition after the read. */
+    uint8_t read_data[2] = {0};
+    err = R_IIC_MASTER_Read(&g_i2c_master0_ctrl,
+                             read_data,
+                             sizeof(read_data),
+                             false);
+    assert(FSP_SUCCESS == err);
+}
+```
+
+<Note>
+Pass `restart = true` to issue a repeated START between write and read phases instead of a STOP. This is required by some sensor protocols.
+</Note>
+
+### Master vs. slave distinction
+
+| Role | Module | API header |
+|---|---|---|
+| Master | `r_iic_master`, `r_iic_b_master`, `r_sci_i2c`, `r_sci_b_i2c`, `r_sau_i2c` | `r_i2c_master_api.h` |
+| Slave | `r_iic_slave`, `r_iic_b_slave`, `r_iica_slave` | `r_i2c_slave_api.h` |
+
+The slave role exposes `open`, `read`, `write`, and `close` functions identical in signature to the master, but the hardware initiates transactions in response to bus START conditions addressed to the slave's own address.
+
+### I3C
+
+The `r_i3c` module extends I2C with dynamic address assignment, high data rate (12.5 MHz HDR-DDR), and in-band interrupts. It supports mixed I2C/I3C buses. Configure the bus role (main master, secondary master, or slave) through the `p_extend` field.
+
+### Shared bus middleware
+
+For applications with multiple devices on the same bus, use `rm_comms_i2c` (I2C Communication Device). It serializes concurrent accesses and handles bus arbitration transparently.
+
+  </Tab>
+  <Tab title="CAN / CAN FD">
+
+## CAN and CAN FD
+
+FSP provides two CAN drivers:
+
+| Module | Standard | Max bitrate |
+|---|---|---|
+| `r_can` | CAN 2.0B | 1 Mbit/s |
+| `r_canfd` | CAN FD (ISO 11898-1:2015) | 8 Mbit/s (data phase) |
+| `r_canfdlite` | CAN FD Lite | Reduced RAM footprint variant |
+
+### Key configuration fields
+
+```c
+/* Configured via the FSP property editor or hand-coded in r_canfd_cfg.h */
+canfd_cfg_t g_canfd0_cfg =
+{
+    .channel          = 0,
+    .p_bit_timing     = &g_canfd0_bit_timing,   /* Nominal bit timing */
+    .p_data_timing    = &g_canfd0_data_timing,  /* FD data-phase timing */
+    .p_callback       = canfd0_callback,
+    .p_context        = NULL,
+    .p_extend         = &g_canfd0_extended_cfg,
+};
+```
+
+### Transmit and receive pattern
+
+```c
+#include "r_canfd.h"
+
+void can_transmit_example(void)
+{
+    can_frame_t frame =
+    {
+        .id         = 0x123U,
+        .type       = CAN_FRAME_TYPE_DATA,
+        .data_length_code = 8U,
+        .options    = CANFD_FRAME_OPTION_FD | CANFD_FRAME_OPTION_BRS,
+        .data       = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08},
+    };
+
+    R_CANFD_Open(&g_canfd0_ctrl, &g_canfd0_cfg);
+    R_CANFD_Write(&g_canfd0_ctrl, 0U, &frame);  /* Transmit on mailbox 0 */
+}
+```
+
+<Tip>
+Use the Event Link Controller (ELC) to trigger CAN frame transmission directly from a timer peripheral without CPU intervention, enabling deterministic transmission scheduling.
+</Tip>
+
+  </Tab>
+  <Tab title="USB">
+
+## USB
+
+The USB stack (`r_usb_basic`) runs on RA2/RA4/RA6 devices with a built-in Full Speed (FS) or High Speed (HS) controller. Class drivers are layered on top.
+
+### Device class drivers
+
+| Module | Class | Description |
+|---|---|---|
+| `r_usb_pcdc` | CDC-ACM | Virtual COM port |
+| `r_usb_phid` | HID | Keyboard / mouse device |
+| `r_usb_pmsc` | MSC | USB mass storage device |
+| `r_usb_paud` | Audio | USB audio device |
+| `r_usb_composite` | Composite | Multiple classes on one USB port |
+
+### Host class drivers
+
+| Module | Class | Description |
+|---|---|---|
+| `r_usb_hcdc` | CDC | Connect to CDC-ACM device |
+| `r_usb_hhid` | HID | Connect to HID device |
+| `r_usb_hmsc` | MSC | Mount USB flash drives |
+
+Azure RTOS USBX classes (`r_usb_haud`, `r_usb_huvc`, etc.) are also available for richer host-side support.
+
+<Note>
+USB requires a 48 MHz clock source. Configure `UCLK` in the CGC module before calling `R_USB_Open`.
+</Note>
+
+  </Tab>
+  <Tab title="Ethernet / BLE">
+
+## Ethernet
+
+The `r_ether` driver implements the MAC layer. A companion `r_ether_phy` driver handles PHY initialization and link detection. Networking middleware can be layered on top:
+
+- **FreeRTOS+TCP** via `rm_freertos_plus_tcp`
+- **Azure RTOS NetX Duo** via `rm_netxduo_ether`
+- **lwIP** via `rm_lwip_ether`
+
+```c
+#include "r_ether.h"
+
+/* Open the Ethernet MAC – PHY reset and auto-negotiation happen internally */
+R_ETHER_Open(&g_ether0_ctrl, &g_ether0_cfg);
+```
+
+The `r_rmac` module provides an alternative MAC implementation used on devices with a dedicated GMAC block (RA8 series).
+
+For IEEE 1588 Precision Time Protocol, FSP includes `r_ptp` and `r_gptp`.
+
+## BLE
+
+BLE drivers (`r_ble_balance`, `r_ble_compact`, `r_ble_extended`) target RA4W1/RA6T2/RA2A2 devices with an on-chip BLE stack. The `rm_ble_abs` abstraction layer exposes a unified API regardless of the underlying driver variant.
+
+BLE Mesh (`rm_ble_mesh`) provides a complete Bluetooth Mesh stack with model support (Generic OnOff, Light Lightness, Sensor, Scene, and many more).
+
+For external BLE modules connected over SPI or UART, use the SPP transport (`rm_ble_abs_spp_transport`) or GTL transport (`rm_ble_abs_gtl_transport`) layers.
+
+  </Tab>
+</Tabs>

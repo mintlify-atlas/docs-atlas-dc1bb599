@@ -1,0 +1,155 @@
+---
+title: "Security APIs"
+description: "Hardware-accelerated cryptography, TrustZone, MCUboot, and Trusted Firmware-M APIs in Renesas FSP."
+---
+
+FSP provides multiple layers of security, from hardware crypto engines to secure boot. All security modules are under the `Security` category in RASC.
+
+## Hardware crypto engines
+
+FSP supports two families of hardware crypto engines, selected based on MCU series:
+
+| Engine | MCU Series | Standard |
+|--------|------------|----------|
+| RSIP (Renesas Secure IP) | RA8 series | CAVP certified |
+| SCE (Secure Crypto Engine) | RA6, RA4 series | CAVP certified |
+
+### RSIP protected mode
+
+The RSIP engine is available on RA8 series MCUs. Use the `r_rsip_protected` module.
+
+Supported algorithms (hardware-accelerated):
+- **Symmetric**: AES-128/192/256 (ECB, CBC, CTR, GCM, CCM, CMAC)
+- **Hash**: SHA-256, SHA-384, SHA-512
+- **Asymmetric**: RSA-2048/4096, ECDSA/ECDH (P-256, P-384), EdDSA
+- **KDF**: HKDF, PBKDF2
+- **RNG**: TRNG (hardware)
+
+```c r_rsip_example.c
+#include "r_rsip_protected.h"
+
+/* Key generation and AES encryption via PSA Crypto API (rm_psa_crypto) */
+#include "psa/crypto.h"
+
+void crypto_example(void)
+{
+    psa_status_t status;
+    psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
+    psa_key_id_t key_id;
+
+    /* Configure AES-128 key for encryption */
+    psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_ENCRYPT | PSA_KEY_USAGE_DECRYPT);
+    psa_set_key_algorithm(&attributes, PSA_ALG_CBC_NO_PADDING);
+    psa_set_key_type(&attributes, PSA_KEY_TYPE_AES);
+    psa_set_key_bits(&attributes, 128);
+
+    /* Generate key in hardware (key never leaves RSIP) */
+    status = psa_generate_key(&attributes, &key_id);
+    FSP_ASSERT(PSA_SUCCESS == status);
+
+    psa_reset_key_attributes(&attributes);
+}
+```
+
+### SCE protected mode
+
+The SCE engine is available on RA6 and RA4 series MCUs. Use the `r_sce_protected` module.
+
+Supported algorithms:
+- **Symmetric**: AES-128/192/256 (ECB, CBC, CTR, GCM, CCM, CMAC)
+- **Hash**: SHA-256
+- **Asymmetric**: RSA-2048, ECDSA/ECDH (P-256)
+- **RNG**: TRNG (hardware)
+
+<Note>
+CAVP-certified variants of both RSIP and SCE are available as separate modules (`r_rsip_e11a_protected_cavp`, `r_sce_protected_cavp`) for applications requiring FIPS validation evidence.
+</Note>
+
+## MbedTLS with FSP hardware acceleration
+
+The `rm_mbedtls` module provides an FSP-specific MbedTLS port that routes cryptographic operations to the hardware engine automatically.
+
+Add to your RASC stack: `Security > MbedTLS (Crypto Only)` or `Security > MbedTLS`.
+
+The `rm_psa_crypto` module exposes the PSA Crypto API backed by hardware:
+
+```c mbedtls_example.c
+#include "psa/crypto.h"
+
+/* Initialize PSA crypto (called once at startup, typically in hal_entry.c) */
+void security_init(void)
+{
+    psa_status_t status = psa_crypto_init();
+    FSP_ASSERT(PSA_SUCCESS == status);
+}
+```
+
+## TrustZone
+
+ARM TrustZone is supported on Cortex-M33 RA MCUs. See the [TrustZone Development Guide](/guides/trustzone) for the full setup workflow.
+
+The `rm_tz_context` module saves and restores RTOS context across Non-Secure Callable (NSC) boundaries when using an RTOS in the Non-Secure project.
+
+## MCUboot secure bootloader
+
+The `rm_mcuboot_port` module integrates the open-source MCUboot bootloader with FSP flash drivers.
+
+Supported upgrade strategies:
+- **Overwrite only** — minimal RAM, no rollback
+- **Swap with scratch** — atomic upgrade with rollback
+- **Direct XIP** — execute-in-place from external flash
+
+```c mcuboot_main.c
+#include "bootutil/bootutil.h"
+#include "bootutil/image.h"
+
+void R_BSP_WarmStart(bsp_warm_start_event_t event)
+{
+    if (BSP_WARM_START_POST_CLOCK == event)
+    {
+        struct boot_rsp rsp;
+
+        /* boot_go() validates and selects the active application image */
+        int rc = boot_go(&rsp);
+        if (0 == rc)
+        {
+            /* Jump to validated application image */
+            RM_MCUBOOT_PORT_BootApp(&rsp);
+        }
+    }
+}
+```
+
+<Warning>
+Never use the example keys shipped with MCUboot (`MCUboot Example Keys (NOT FOR PRODUCTION)`) in a production build. Generate your own signing keys with `imgtool keygen`.
+</Warning>
+
+## Trusted Firmware-M (TF-M)
+
+TF-M provides a PSA-compliant Secure Processing Environment on RA8 series MCUs.
+
+Add to your RASC Secure project: `Security > Trusted Firmware-M`.
+
+The Non-Secure application calls TF-M services via PSA APIs, which are automatically routed through NSC functions:
+
+```c tf_m_example.c
+#include "psa/crypto.h"         /* Routes to TF-M Secure partition */
+#include "psa/protected_storage.h"
+
+/* All PSA calls from Non-Secure side transparently invoke TF-M */
+void app_write_secret(void)
+{
+    uint8_t secret[] = "my-secret-data";
+    psa_status_t status = psa_ps_set(1U, sizeof(secret), secret, PSA_STORAGE_FLAG_WRITE_ONCE);
+    FSP_ASSERT(PSA_SUCCESS == status);
+}
+```
+
+<CardGroup cols={2}>
+  <Card title="TrustZone Guide" icon="shield-halved" href="/guides/trustzone">
+    Step-by-step TrustZone project setup
+  </Card>
+  <Card title="Security Middleware" icon="lock" href="/middleware/security">
+    Overview of all security middleware modules
+  </Card>
+</CardGroup>

@@ -1,0 +1,331 @@
+---
+title: 'Storage drivers'
+description: 'Flash HP/LP, QSPI, OSPI, SD/MMC, MRAM, block media abstraction, and virtual EEPROM drivers for the Renesas RA family.'
+keywords: ['flash', 'QSPI', 'OSPI', 'SD/MMC', 'MRAM', 'VEE', 'LittleFS', 'FAT', 'FSP', 'Renesas RA']
+---
+
+FSP storage drivers span on-chip flash, external serial NOR flash, SD/MMC cards, and MRAM. A block media abstraction layer (`rm_block_media_*`) unifies these into a single interface consumed by FAT and LittleFS file system middleware.
+
+<CardGroup cols={2}>
+  <Card title="Flash HP / LP" icon="bolt">
+    On-chip code and data flash. `r_flash_hp` for high-performance devices; `r_flash_lp` for low-power devices.
+  </Card>
+  <Card title="QSPI / OSPI" icon="database">
+    External quad-SPI and octal-SPI NOR flash. Instances: `r_qspi`, `r_ospi`, `r_ospi_b`.
+  </Card>
+  <Card title="SD / MMC (SDHI)" icon="sd-card">
+    Secure Digital and MultiMediaCard via the SDHI peripheral (`r_sdhi`).
+  </Card>
+  <Card title="MRAM" icon="memory">
+    Magnetoresistive RAM (`r_mram`) for byte-level non-volatile storage without erase cycles.
+  </Card>
+</CardGroup>
+
+---
+
+<Tabs>
+  <Tab title="Flash HP / LP">
+
+## On-chip flash
+
+RA devices contain two distinct flash regions with separate erase block sizes and programming granularities:
+
+| Region | Typical use | Access during self-programming |
+|---|---|---|
+| **Code flash** | Program image, read-only constants | Requires BGO or RAM execution |
+| **Data flash** | Non-volatile configuration, calibration | Can write while code flash executes |
+
+Two driver variants cover the RA product range:
+
+| Module | Target devices | Notes |
+|---|---|---|
+| `r_flash_hp` | RA2L1, RA4M1, RA6M3, RA8M1, etc. | High-performance flash with dual-bank support |
+| `r_flash_lp` | RA2E1, RA2A1, RA2L1 LP, etc. | Low-power flash; no BGO for code flash |
+
+### Configuration structure
+
+`flash_cfg_t` is defined in `r_flash_api.h`:
+
+```c
+typedef struct st_flash_cfg
+{
+    bool      data_flash_bgo;    /* true = data flash operates in Background Operation mode */
+    void (* p_callback)(flash_callback_args_t * p_args); /* Callback for BGO completion */
+    void const * p_extend;       /* Driver-specific extension */
+    void       * p_context;      /* User context passed to callback */
+    uint8_t    ipl;              /* Flash ready interrupt priority */
+    IRQn_Type  irq;              /* Flash ready interrupt number */
+    uint8_t    err_ipl;          /* Flash error interrupt priority */
+    IRQn_Type  err_irq;          /* Flash error interrupt number */
+} flash_cfg_t;
+```
+
+### Callback events
+
+| Event | Description |
+|---|---|
+| `FLASH_EVENT_WRITE_COMPLETE` | BGO write operation finished successfully |
+| `FLASH_EVENT_ERASE_COMPLETE` | BGO erase operation finished successfully |
+| `FLASH_EVENT_BLANK` | Blank check: area is blank |
+| `FLASH_EVENT_NOT_BLANK` | Blank check: area contains data |
+| `FLASH_EVENT_ERR_DF_ACCESS` | Data flash operation failed (wrote to unerased area) |
+| `FLASH_EVENT_ERR_CF_ACCESS` | Code flash operation failed |
+| `FLASH_EVENT_ERR_CMD_LOCKED` | FCU in locked state |
+| `FLASH_EVENT_ERR_FAILURE` | Erase or program operation failed |
+
+### Flash write and erase example
+
+```c
+#include "r_flash_hp.h"
+
+#define DATA_FLASH_ADDR     (0x40100000U)   /* Data flash start address for RA6M3 */
+#define DATA_FLASH_BLOCKS   (1U)
+#define WRITE_SIZE          (4U)            /* Must be multiple of programming line size */
+
+static volatile bool g_flash_done = false;
+
+void flash_callback(flash_callback_args_t * p_args)
+{
+    if (FLASH_EVENT_ERASE_COMPLETE == p_args->event ||
+        FLASH_EVENT_WRITE_COMPLETE == p_args->event)
+    {
+        g_flash_done = true;
+    }
+}
+
+void flash_example(void)
+{
+    fsp_err_t err;
+
+    /* Step 1: Open the flash driver */
+    err = R_FLASH_HP_Open(&g_flash0_ctrl, &g_flash0_cfg);
+    assert(FSP_SUCCESS == err);
+
+    /* Step 2: Blank check before writing */
+    flash_result_t blank_result;
+    err = R_FLASH_HP_BlankCheck(&g_flash0_ctrl,
+                                 DATA_FLASH_ADDR,
+                                 WRITE_SIZE,
+                                 &blank_result);
+    assert(FSP_SUCCESS == err);
+
+    /* Step 3: Erase one data flash block if not blank */
+    if (FLASH_RESULT_NOT_BLANK == blank_result)
+    {
+        g_flash_done = false;
+        err = R_FLASH_HP_Erase(&g_flash0_ctrl, DATA_FLASH_ADDR, DATA_FLASH_BLOCKS);
+        assert(FSP_SUCCESS == err);
+
+        /* Wait for BGO erase callback when data_flash_bgo = true */
+        while (!g_flash_done) { /* yield or spin */ }
+    }
+
+    /* Step 4: Write four bytes to data flash */
+    uint8_t write_data[4] = {0xDE, 0xAD, 0xBE, 0xEF};
+    g_flash_done = false;
+    err = R_FLASH_HP_Write(&g_flash0_ctrl,
+                            (uint32_t) write_data,
+                            DATA_FLASH_ADDR,
+                            WRITE_SIZE);
+    assert(FSP_SUCCESS == err);
+
+    while (!g_flash_done) { /* wait for BGO write callback */ }
+
+    /* Step 5: Close when done */
+    R_FLASH_HP_Close(&g_flash0_ctrl);
+}
+```
+
+<Warning>
+Always erase a flash block before writing to it. Writing to a non-blank location generates a `FLASH_EVENT_ERR_DF_ACCESS` error and no data is written.
+</Warning>
+
+### Code flash vs. data flash
+
+| Characteristic | Code flash | Data flash |
+|---|---|---|
+| Typical erase block | 8 KB or 32 KB | 64 B |
+| Minimum write unit | 128 B (HP) | 4 B (HP) |
+| Read during write | Only from RAM (or other flash bank) | Yes, while code executes |
+| Dual-bank support | Yes (HP, select devices) | No |
+| BGO mode | Not supported on r_flash_lp | Supported |
+
+### Dual-bank operation
+
+`r_flash_hp` supports dual-bank (ping-pong) operation on select RA6/RA8 devices. Use `R_FLASH_HP_BankSwap` to swap the startup bank after a successful OTA firmware update.
+
+  </Tab>
+  <Tab title="QSPI / OSPI">
+
+## QSPI (r_qspi)
+
+`r_qspi` maps external QSPI NOR flash into the CPU's memory-mapped address space (XIP — eXecute-In-Place), allowing code and read-only data to reside in external flash.
+
+```c
+#include "r_qspi.h"
+
+void qspi_example(void)
+{
+    /* Open and configure the QSPI interface */
+    R_QSPI_Open(&g_qspi0_ctrl, &g_qspi0_cfg);
+
+    /* Erase a 4 KB sector */
+    R_QSPI_Erase(&g_qspi0_ctrl, (uint8_t *) 0x60010000U, 4096U);
+
+    /* Write 256 bytes – address must be within the XIP window */
+    uint8_t page[256];
+    memset(page, 0xA5, sizeof(page));
+    R_QSPI_Write(&g_qspi0_ctrl, page, (uint8_t *) 0x60010000U, sizeof(page));
+
+    /* Reads can be done directly via pointer dereference in XIP mode */
+    const uint8_t * p_data = (const uint8_t *) 0x60010000U;
+    (void) *p_data;
+}
+```
+
+## OSPI (r_ospi / r_ospi_b)
+
+`r_ospi_b` supports octal-SPI flash and HyperBus memory with DDR signaling (up to ~200 MHz). It is the primary external memory interface on RA8D1 and RA8M1 devices.
+
+Supported memory devices (via `r_ospi_b`):
+- IS25[L/W]X series (ISSI)
+- MX25L series (Macronix)
+- S28H[L/S] series (Infineon/Cypress)
+- W95 HyperRAM (Winbond)
+
+```c
+#include "r_ospi_b.h"
+
+void ospi_write_example(void)
+{
+    R_OSPI_B_Open(&g_ospi_b0_ctrl, &g_ospi_b0_cfg);
+
+    /* Erase and write through the SPI protocol layer */
+    R_OSPI_B_Erase(&g_ospi_b0_ctrl, (uint8_t *) 0x90000000U, 4096U);
+
+    uint8_t buf[256] = { /* data */ };
+    R_OSPI_B_Write(&g_ospi_b0_ctrl, buf, (uint8_t *) 0x90000000U, sizeof(buf));
+}
+```
+
+  </Tab>
+  <Tab title="SD / MMC">
+
+## SD/MMC (r_sdhi)
+
+The SDHI peripheral supports SD (SDSC, SDHC, SDXC) and MMC/eMMC cards over 1-bit, 4-bit, and 8-bit (MMC only) bus widths.
+
+`r_sdhi` is used through the block media abstraction (`rm_block_media_sdmmc`) rather than directly. The abstraction layer handles card initialization, CSD/CID parsing, and command sequencing.
+
+### Block media for SD/MMC
+
+```c
+#include "rm_block_media_sdmmc.h"
+
+void sdmmc_example(void)
+{
+    /* Open the block media instance (opens r_sdhi internally) */
+    rm_block_media_sdmmc_open(&g_rm_block_media0_ctrl,
+                               &g_rm_block_media0_cfg);
+
+    /* Write a 512-byte block at LBA 0 */
+    uint8_t sector[512];
+    memset(sector, 0, sizeof(sector));
+    rm_block_media_sdmmc_write(&g_rm_block_media0_ctrl, sector, 0U, 1U);
+
+    /* Read it back */
+    uint8_t read_buf[512];
+    rm_block_media_sdmmc_read(&g_rm_block_media0_ctrl, read_buf, 0U, 1U);
+}
+```
+
+Mount this block media instance to FreeRTOS+FAT, Azure RTOS FileX, or LittleFS for a full file system.
+
+  </Tab>
+  <Tab title="Block media / VEE">
+
+## Block media abstraction
+
+`rm_block_media_*` provides a unified 512-byte sector read/write/erase interface consumed by file system middleware. Available implementations:
+
+| Module | Backing store |
+|---|---|
+| `rm_block_media_sdmmc` | SD/MMC card via r_sdhi |
+| `rm_block_media_spi` | SPI NOR flash via r_qspi or r_ospi |
+| `rm_block_media_usb` | USB mass storage host via r_usb_hmsc |
+| `rm_block_media_ram` | RAM buffer (testing / ramdisk) |
+| `rm_block_media_user` | Custom implementation |
+
+### File system layers
+
+Mount any block media instance to one of the following file system middlewares:
+
+| Middleware | Module | Notes |
+|---|---|---|
+| FreeRTOS+FAT | `rm_freertos_plus_fat` | FAT12/16/32, thread-safe |
+| Azure RTOS FileX | `rm_filex_block_media` | FAT12/16/32/exFAT with LevelX wear leveling |
+| LittleFS | `rm_littlefs_flash` / `rm_littlefs_spi_flash` | Power-fail-safe log-structured FS |
+
+## Virtual EEPROM (rm_vee_flash)
+
+`rm_vee_flash` emulates byte-addressable EEPROM on data flash. It handles wear leveling automatically by distributing writes across the erase block. This is the recommended approach for storing device configuration, calibration tables, and counters in non-volatile memory.
+
+```c
+#include "rm_vee_flash.h"
+
+#define VEE_RECORD_ID   (0U)
+#define CONFIG_SIZE     (16U)
+
+void vee_example(void)
+{
+    fsp_err_t err;
+
+    /* Open the VEE instance (internally opens r_flash_hp/lp) */
+    err = RM_VEE_FLASH_Open(&g_vee0_ctrl, &g_vee0_cfg);
+    assert(FSP_SUCCESS == err);
+
+    /* Write a 16-byte configuration record */
+    uint8_t config[CONFIG_SIZE] = {0x01, 0x02, 0x03, /* ... */ };
+    err = RM_VEE_FLASH_RecordWrite(&g_vee0_ctrl,
+                                    VEE_RECORD_ID,
+                                    config,
+                                    CONFIG_SIZE);
+    assert(FSP_SUCCESS == err);
+
+    /* Read the record back */
+    uint8_t  read_buf[CONFIG_SIZE];
+    uint32_t read_len = 0U;
+    err = RM_VEE_FLASH_RecordRead(&g_vee0_ctrl,
+                                   VEE_RECORD_ID,
+                                   read_buf,
+                                   &read_len);
+    assert(FSP_SUCCESS == err);
+}
+```
+
+<Tip>
+`rm_vee_flash` supports up to 65,535 record IDs and automatically performs segment refresh (compaction) when a segment becomes full. Configure the number of segments and their size in `rm_vee_flash_cfg_t`.
+</Tip>
+
+## MRAM (r_mram)
+
+On RA8 devices equipped with embedded MRAM, `r_mram` provides byte-level write access without an erase cycle. MRAM endurance is effectively unlimited and write latency is comparable to SRAM, making it suitable for high-frequency logging.
+
+```c
+#include "r_mram.h"
+
+void mram_example(void)
+{
+    R_MRAM_Open(&g_mram0_ctrl, &g_mram0_cfg);
+
+    /* Write directly — no erase required */
+    uint8_t data[] = {0xCA, 0xFE};
+    R_MRAM_Write(&g_mram0_ctrl,
+                  (uint32_t) data,
+                  MRAM_BASE_ADDRESS,
+                  sizeof(data));
+}
+```
+
+  </Tab>
+</Tabs>

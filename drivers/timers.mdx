@@ -1,0 +1,303 @@
+---
+title: 'Timer drivers'
+description: 'GPT, AGT, TAU, TML, ULPT, RTC, WDT, and POEG timer and watchdog drivers for the Renesas RA family.'
+keywords: ['GPT', 'AGT', 'PWM', 'RTC', 'WDT', 'POEG', 'timer', 'FSP', 'Renesas RA']
+---
+
+FSP provides a unified timer HAL API (`r_timer_api.h`) implemented by several hardware peripherals. All timer drivers share the same `open`, `start`, `stop`, `reset`, `periodSet`, `dutyCycleSet`, `statusGet`, and `close` interface.
+
+<CardGroup cols={2}>
+  <Card title="GPT" icon="gauge">
+    General PWM Timer. 32-bit, up to 10 channels. Saw-wave and triangle-wave PWM.
+  </Card>
+  <Card title="AGT" icon="battery-low">
+    Asynchronous General Timer. 16-bit low-power timer; runs in software standby.
+  </Card>
+  <Card title="TAU / TML" icon="clock">
+    TAU: 16/8-bit independent channel timer. TML: 32-bit interval timer.
+  </Card>
+  <Card title="ULPT" icon="leaf">
+    Ultra-Low-Power Timer. Operates down to sub-microamp current in deep software standby.
+  </Card>
+  <Card title="RTC" icon="calendar">
+    Real-time clock (`r_rtc`, `r_rtc_c`) with calendar and alarm functions.
+  </Card>
+  <Card title="WDT / IWDT" icon="shield">
+    Watchdog (`r_wdt`) and Independent Watchdog (`r_iwdt`) for system health monitoring.
+  </Card>
+</CardGroup>
+
+---
+
+## Timer configuration structure
+
+`timer_cfg_t` is defined in `r_timer_api.h` and is shared across GPT, AGT, TAU, TML, and ULPT:
+
+```c
+typedef struct st_timer_cfg
+{
+    timer_mode_t mode;              /* Periodic, one-shot, PWM, or triangle-wave PWM */
+    uint32_t     period_counts;     /* Period in raw timer counts */
+    timer_source_div_t source_div;  /* Clock divider: /1, /2, /4, /8 … /1024 */
+    uint32_t     duty_cycle_counts; /* Duty cycle in counts (PWM modes only) */
+    uint8_t      channel;           /* Hardware channel number */
+    uint8_t      cycle_end_ipl;     /* Cycle-end interrupt priority */
+    IRQn_Type    cycle_end_irq;     /* Cycle-end interrupt vector */
+    void (* p_callback)(timer_callback_args_t * p_args); /* NULL for no interrupt */
+    void       * p_context;
+    void const * p_extend;          /* Hardware-specific extension (e.g., gpt_extended_cfg_t) */
+} timer_cfg_t;
+```
+
+### Timer modes
+
+| Mode | Enum | Description |
+|---|---|---|
+| Periodic | `TIMER_MODE_PERIODIC` | Counter wraps; callback fires on each overflow |
+| One-shot | `TIMER_MODE_ONE_SHOT` | Counter stops after one period elapses |
+| PWM (saw-wave) | `TIMER_MODE_PWM` | Asymmetric PWM; set period and duty via counts |
+| One-shot pulse | `TIMER_MODE_ONE_SHOT_PULSE` | Single PWM pulse with fixed buffer operation |
+| Triangle-wave symmetric PWM | `TIMER_MODE_TRIANGLE_WAVE_SYMMETRIC_PWM` | Center-aligned PWM for motor drives |
+| Triangle-wave asymmetric PWM | `TIMER_MODE_TRIANGLE_WAVE_ASYMMETRIC_PWM` | Asymmetric center-aligned PWM |
+| Triangle-wave asymmetric PWM mode 3 | `TIMER_MODE_TRIANGLE_WAVE_ASYMMETRIC_PWM_MODE3` | Trough/crest duty values set once; update only when needed |
+
+### Callback events
+
+| Event | Description |
+|---|---|
+| `TIMER_EVENT_CYCLE_END` | Period elapsed (also aliased as `TIMER_EVENT_CREST` for triangle-wave) |
+| `TIMER_EVENT_TROUGH` | Counter reached 0 in triangle-wave mode |
+| `TIMER_EVENT_CAPTURE_A` | Input capture event on channel A |
+| `TIMER_EVENT_CAPTURE_B` | Input capture event on channel B |
+| `TIMER_EVENT_COMPARE_A` … `_F` | Compare match on output compare registers A–F |
+| `TIMER_EVENT_DEAD_TIME` | Dead-time insertion event |
+
+---
+
+<Tabs>
+  <Tab title="GPT">
+
+## General PWM Timer (r_gpt)
+
+GPT is a 32-bit, multi-function timer supporting up to 10 independent channels. It is the primary timer for PWM generation, input capture, and output compare.
+
+### PWM generation example
+
+The FSP configurator generates the control block (`g_timer0_ctrl`), configuration (`g_timer0_cfg`), and instance (`g_timer0`).
+
+```c
+#include "r_gpt.h"
+
+#define GPT_PERIOD_COUNTS   (1000U)   /* Configured for desired frequency */
+#define DUTY_50_PERCENT     (500U)    /* 50% duty cycle */
+
+void gpt_pwm_example(void)
+{
+    fsp_err_t err;
+
+    /* Open GPT channel 0 in PWM mode */
+    err = R_GPT_Open(&g_timer0_ctrl, &g_timer0_cfg);
+    assert(FSP_SUCCESS == err);
+
+    /* Set duty cycle to 50% (updates take effect on next period boundary) */
+    err = R_GPT_DutyCycleSet(&g_timer0_ctrl,
+                              DUTY_50_PERCENT,
+                              GPT_IO_PIN_GTIOCA);   /* Output pin A */
+    assert(FSP_SUCCESS == err);
+
+    /* Start the counter – PWM output begins immediately */
+    err = R_GPT_Start(&g_timer0_ctrl);
+    assert(FSP_SUCCESS == err);
+}
+
+/* Update duty cycle at runtime from the callback or main loop */
+void update_duty(uint32_t new_duty_counts)
+{
+    R_GPT_DutyCycleSet(&g_timer0_ctrl, new_duty_counts, GPT_IO_PIN_GTIOCA);
+}
+```
+
+### Period and frequency calculation
+
+```c
+/* period_counts = timer_clock_Hz / desired_frequency_Hz
+ * timer_clock_Hz = PCLKD / source_div
+ *
+ * Example: PCLKD = 48 MHz, source_div = /1, desired = 20 kHz
+ * period_counts = 48,000,000 / 20,000 = 2400
+ */
+```
+
+### Three-phase PWM (r_gpt_three_phase)
+
+For brushless motor drives, `r_gpt_three_phase` combines three GPT channels (U/V/W) with synchronized dead-time insertion. All three channels start from the same base count to ensure phase alignment.
+
+```c
+#include "r_gpt_three_phase.h"
+
+three_phase_duty_cycle_t duty =
+{
+    .duty[0] = 1200U,   /* U phase duty */
+    .duty[1] = 800U,    /* V phase duty */
+    .duty[2] = 1000U,   /* W phase duty */
+};
+
+R_GPT_THREE_PHASE_Open(&g_three_phase0_ctrl, &g_three_phase0_cfg);
+R_GPT_THREE_PHASE_Start(&g_three_phase0_ctrl);
+R_GPT_THREE_PHASE_DutyCycleSet(&g_three_phase0_ctrl, &duty);
+```
+
+  </Tab>
+  <Tab title="AGT">
+
+## Asynchronous General Timer (r_agt)
+
+AGT is a 16-bit timer designed for low-power operation. It can be clocked from the sub-clock (32.768 kHz) or the LOCO and continues running during software standby sleep states.
+
+Typical uses:
+- Periodic wake-up from software standby
+- Debounce and timeout timers
+- Low-frequency PWM output on the AGTOA/AGTOB pins
+
+```c
+#include "r_agt.h"
+
+void agt_periodic_example(void)
+{
+    /* Open AGT0 configured for 100 ms periodic interrupt */
+    R_AGT_Open(&g_timer1_ctrl, &g_timer1_cfg);
+    R_AGT_Start(&g_timer1_ctrl);
+}
+
+void agt_callback(timer_callback_args_t * p_args)
+{
+    if (TIMER_EVENT_CYCLE_END == p_args->event)
+    {
+        /* Executes every 100 ms even during software standby */
+    }
+}
+```
+
+<Tip>
+AGT is the recommended timer for battery-powered applications that need periodic sensor polling while the core is sleeping.
+</Tip>
+
+  </Tab>
+  <Tab title="TAU / TML / ULPT">
+
+## TAU – Independent channel timer (r_tau / r_tau_pwm)
+
+TAU (Timer Array Unit) provides 8 independent 16-bit or 8-bit timer channels. Each channel can independently operate in interval, capture, or PWM mode.
+
+`r_tau_pwm` enables simultaneous multi-channel PWM output from a single master interval counter, useful for LED dimming or simple motor control on RA0 and RA2 devices.
+
+## TML – 32-bit interval timer (r_tml)
+
+`r_tml` is a 32-bit timer available on RA0/RA2 low-pin-count devices. It provides a simple periodic interrupt for task scheduling in bare-metal applications.
+
+## ULPT – Ultra-Low-Power Timer (r_ulpt)
+
+`r_ulpt` targets applications with extremely tight power budgets. It operates down to several hundred nanoamps in deep software standby.
+
+```c
+#include "r_ulpt.h"
+
+void ulpt_example(void)
+{
+    /* Open ULPT in periodic mode clocked from LOCO (~32 kHz) */
+    R_ULPT_Open(&g_timer2_ctrl, &g_timer2_cfg);
+    R_ULPT_Start(&g_timer2_ctrl);
+    /* MCU can now enter deep software standby; ULPT fires wake-up interrupt */
+}
+```
+
+  </Tab>
+  <Tab title="RTC">
+
+## Real-time clock (r_rtc / r_rtc_c)
+
+The RTC provides calendar (year, month, day, day-of-week, hour, minute, second) and alarm functions backed by the 32.768 kHz sub-clock.
+
+```c
+#include "r_rtc.h"
+
+void rtc_example(void)
+{
+    R_RTC_Open(&g_rtc0_ctrl, &g_rtc0_cfg);
+
+    /* Set current time */
+    rtc_time_t current_time =
+    {
+        .tm_sec  = 0,
+        .tm_min  = 30,
+        .tm_hour = 9,
+        .tm_mday = 2,
+        .tm_mon  = 3,    /* April (0-indexed) */
+        .tm_year = 126,  /* Years since 1900 → 2026 */
+    };
+    R_RTC_CalendarTimeSet(&g_rtc0_ctrl, &current_time);
+
+    /* Configure a one-time alarm */
+    rtc_alarm_time_t alarm =
+    {
+        .time.tm_hour  = 10,
+        .time.tm_min   = 0,
+        .time.tm_sec   = 0,
+        .hour_match    = true,
+        .min_match     = true,
+        .sec_match     = true,
+    };
+    R_RTC_CalendarAlarmSet(&g_rtc0_ctrl, &alarm);
+}
+```
+
+`r_rtc_c` provides an updated RTC peripheral variant with extended capture-on-event functionality.
+
+  </Tab>
+  <Tab title="WDT / IWDT / POEG">
+
+## Watchdog Timer (r_wdt)
+
+`r_wdt` monitors application health. The application must call `R_WDT_Refresh` periodically. If the watchdog is not refreshed before the timeout period expires, it resets the MCU.
+
+```c
+#include "r_wdt.h"
+
+void watchdog_refresh_task(void)
+{
+    /* Called from the main loop or a high-priority RTOS task */
+    R_WDT_Refresh(&g_wdt0_ctrl);
+}
+```
+
+## Independent Watchdog Timer (r_iwdt)
+
+`r_iwdt` operates from a dedicated on-chip oscillator independent of the system clock. It continues running even if the main clock fails, providing a second layer of protection.
+
+<Warning>
+Once `R_IWDT_Open` is called and the watchdog is started, it cannot be stopped. Ensure `R_IWDT_Refresh` is called reliably within the timeout window.
+</Warning>
+
+## Port Output Enable for GPT (r_poeg)
+
+POEG is a safety module that gates GPT PWM output pins. When a POEG event occurs (overcurrent signal from an external comparator, software trigger, or GPT oscillation stop detection), it immediately drives the PWM output pins to a safe state (high-impedance or defined logic level) without CPU intervention.
+
+```c
+#include "r_poeg.h"
+
+void poeg_example(void)
+{
+    /* Open POEG unit 0 – gates GPT channels linked in r_poeg_cfg_extend_t */
+    R_POEG_Open(&g_poeg0_ctrl, &g_poeg0_cfg);
+
+    /* After the fault clears, re-enable GPT outputs */
+    R_POEG_OutputEnable(&g_poeg0_ctrl);
+}
+```
+
+<Note>
+POEG is essential for motor drive applications. Configure it to monitor the nFAULT signal from a gate driver IC. When the driver reports an overcurrent fault, POEG cuts the PWM outputs within nanoseconds — far faster than any software handler.
+</Note>
+
+  </Tab>
+</Tabs>

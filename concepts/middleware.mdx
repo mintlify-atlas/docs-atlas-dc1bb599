@@ -1,0 +1,184 @@
+---
+title: "Middleware"
+description: "FSP middleware modules that build on HAL drivers to provide RTOS, networking, security, file system, and motor control functionality."
+keywords: ["middleware", "rm_", "FreeRTOS", "ThreadX", "LwIP", "NetX Duo", "MbedTLS", "LittleFS", "motor control", "rm_comms", "RASC"]
+---
+
+Middleware modules in FSP sit above the HAL driver layer and provide complete software stacks for common embedded subsystems. They are prefixed with `rm_` to distinguish them from the `r_` HAL drivers they depend on.
+
+## What middleware modules do
+
+HAL drivers expose raw peripheral operations: open a UART, send bytes, receive bytes. Middleware modules compose those primitives into higher-level behavior:
+
+```
+┌──────────────────────────────────────────────────────┐
+│                  Your Application                    │
+├──────────────────────────────────────────────────────┤
+│  Middleware (rm_*)                                   │
+│  ┌────────────┐ ┌──────────┐ ┌────────┐ ┌─────────┐ │
+│  │  FreeRTOS  │ │  LwIP /  │ │MbedTLS │ │ Motor   │ │
+│  │  ThreadX   │ │ NetX Duo │ │  RSIP  │ │ Control │ │
+│  └─────┬──────┘ └────┬─────┘ └───┬────┘ └────┬────┘ │
+├────────┼─────────────┼───────────┼────────────┼──────┤
+│  HAL Drivers (r_*)   │           │            │      │
+│  UART · SPI · I2C · Ethernet · Flash · ADC · GPT    │
+├──────────────────────────────────────────────────────┤
+│  BSP  ·  RA MCU Hardware                            │
+└──────────────────────────────────────────────────────┘
+```
+
+Like HAL drivers, middleware modules follow the same interface contract: an API header in `ra/fsp/inc/api/` declares `*_cfg_t`, `*_ctrl_t`, and `*_api_t` types, and RASC generates the concrete instance variables.
+
+## Middleware families
+
+### RTOS ports
+
+FSP ships RTOS port layers for two production-ready real-time operating systems.
+
+<Tabs>
+  <Tab title="FreeRTOS">
+    The FSP FreeRTOS port integrates the FreeRTOS kernel with RA-specific interrupt and memory management. It provides:
+
+    - Kernel-aware UART, SPI, and I2C drivers that yield the CPU during blocking transfers.
+    - Thread-safe wrappers for HAL driver instances.
+    - Integration with the RA low-power modes via tickless idle.
+
+    Add the **FreeRTOS** component in RASC. It automatically pulls in the heap allocator and port files for your MCU's Arm core.
+  </Tab>
+  <Tab title="Eclipse ThreadX (formerly Azure RTOS)">
+    The FSP ThreadX port supports the Eclipse ThreadX kernel (previously Azure RTOS ThreadX). ThreadX integration includes:
+
+    - USBX for USB device and host stacks.
+    - FileX for FAT file system support.
+    - NetX Duo for IPv4/IPv6 networking (see the Networking section below).
+
+    <Warning>
+    Microsoft discontinued Azure RTOS updates for RA hardware on November 21, 2023. Eclipse Foundation now stewards the codebase under the Eclipse ThreadX name. Check the [FSP release notes](https://github.com/renesas/fsp/releases) for support status before starting new designs.
+    </Warning>
+  </Tab>
+</Tabs>
+
+### Networking stacks
+
+| Module | Protocol | Underlying HAL |
+|---|---|---|
+| LwIP | IPv4/IPv6, TCP, UDP | `r_ether_api.h` |
+| NetX Duo | IPv4/IPv6, TCP, UDP (ThreadX) | `r_ether_api.h` |
+| `rm_wifi_api.h` | WiFi (via AT-command module) | `r_uart_api.h` |
+
+The Ethernet HAL driver (`r_ether`) operates the RA ETHERC/EDMAC block. Both LwIP and NetX Duo sit on top of this driver and provide a BSD-socket-like API to your application.
+
+### Security
+
+FSP exposes the RA Secure IP (RSIP) and Secure Cryptography Engine (SCE) hardware accelerators through middleware wrappers:
+
+- **Mbed TLS** — TLS 1.2 / TLS 1.3 using RSIP hardware acceleration for AES, SHA, ECC, and RSA operations.
+- **RSIP middleware** — Direct access to the on-chip RSIP block for symmetric encryption, asymmetric cryptography, key management, and hardware random number generation.
+- **Secure Boot** — Firmware update and verification using the on-chip OFS (Option Function Select) and key management hardware.
+
+<Note>
+RSIP is available on RA4, RA6, and RA8 series devices. Older or entry-level devices use the SCE block instead. RASC selects the correct security middleware variant for your target MCU automatically.
+</Note>
+
+### File systems
+
+| Module | Description |
+|---|---|
+| LittleFS | Wear-leveling file system for internal data flash (`r_flash_api.h`) |
+| FileX (ThreadX) | Microsoft FileX FAT file system for external SD/eMMC (`r_sdhi_api.h`) |
+| `rm_vee_api.h` | Virtual EEPROM emulation on code flash |
+
+LittleFS is the preferred choice for bare-metal or FreeRTOS designs that need persistent key-value storage on the MCU's internal data flash. It handles power-fail safety and wear leveling transparently.
+
+### Motor control
+
+FSP includes an extensive motor control middleware library, built from composable `rm_motor_*` modules:
+
+| API header | Module function |
+|---|---|
+| `rm_motor_api.h` | Top-level motor control coordinator |
+| `rm_motor_speed_api.h` | Speed control loop |
+| `rm_motor_current_api.h` | Current (torque) control loop |
+| `rm_motor_angle_api.h` | Encoder or estimator-based angle tracking |
+| `rm_motor_driver_api.h` | Gate driver and PWM output abstraction |
+| `rm_motor_120_driver_api.h` | 120° (trapezoidal) BLDC driver |
+| `rm_motor_position_api.h` | Position control for servo applications |
+| `rm_motor_inertia_estimate_api.h` | Online inertia estimation |
+| `rm_motor_tuner_api.h` | Auto-tuning for PI controllers |
+
+Each module is independently selectable in RASC. A minimal vector-controlled FOC drive requires `rm_motor`, `rm_motor_speed`, `rm_motor_current`, `rm_motor_angle`, and `rm_motor_driver`. More specialized capabilities like position control or inertia estimation are added as additional stacks.
+
+## The `rm_comms_*` communication abstraction layer
+
+The `rm_comms` layer is a middleware abstraction that decouples sensor and peripheral middleware from the specific HAL bus driver being used. A sensor driver such as `rm_zmod4xxx` (gas sensor) or `rm_air_sensor` specifies that it needs an I2C bus, but does not care whether the underlying implementation is `r_iic_master`, `r_sci_i2c`, or a bitbang driver.
+
+```
+┌────────────────────────────────┐
+│  Sensor middleware             │
+│  rm_zmod4xxx, rm_air_sensor …  │
+├────────────────────────────────┤
+│  rm_comms_api.h                │  ← Abstraction interface
+├────────────────────────────────┤
+│  rm_comms_i2c  │  rm_comms_spi │  ← Bus-specific adapters
+├────────────────┼───────────────┤
+│  r_iic_master  │  r_spi        │  ← HAL drivers
+└────────────────┴───────────────┘
+```
+
+The `rm_comms_api.h` interface provides `open`, `close`, `read`, `write`, and `writeRead` operations. Middleware built on this interface is portable across different RA MCU families that may use different SCI or IIC channel implementations.
+
+```c
+/* rm_comms_api.h — the communication abstraction interface */
+typedef struct st_rm_comms_api
+{
+    fsp_err_t (* open)(rm_comms_ctrl_t * const p_ctrl, rm_comms_cfg_t const * const p_cfg);
+    fsp_err_t (* close)(rm_comms_ctrl_t * const p_ctrl);
+    fsp_err_t (* read)(rm_comms_ctrl_t * const p_ctrl, uint8_t * const p_dest, uint32_t const bytes);
+    fsp_err_t (* write)(rm_comms_ctrl_t * const p_ctrl, uint8_t const * const p_src, uint32_t const bytes);
+    fsp_err_t (* writeRead)(rm_comms_ctrl_t * const p_ctrl, rm_comms_write_read_params_t const params);
+    fsp_err_t (* callbackSet)(rm_comms_ctrl_t * const p_ctrl,
+                              void (* p_callback)(rm_comms_callback_args_t *),
+                              void * const p_context);
+} rm_comms_api_t;
+```
+
+## Adding middleware in RASC
+
+<Steps>
+  <Step title="Open the Stacks view">
+    Double-click `configuration.xml` in e² studio to open RASC. Select the **Stacks** tab.
+  </Step>
+  <Step title="Add the middleware stack">
+    Click **New Stack** and browse to the middleware category you need (for example, **Networking → LwIP** or **Motor Control → Motor Speed**). RASC adds the module and shows any required sub-components.
+  </Step>
+  <Step title="Resolve dependencies">
+    RASC automatically adds dependent HAL drivers (for example, `r_ether` when you add LwIP). Orange warning indicators appear on any module that requires further configuration. Click each module to review and complete its properties.
+  </Step>
+  <Step title="Configure the middleware">
+    Select the middleware module in the stack. In the **Properties** panel, set parameters such as heap size, task priority (for RTOS-integrated modules), or protocol-specific options.
+  </Step>
+  <Step title="Generate code">
+    Click **Generate Project Content**. RASC writes middleware configuration headers to `ra_cfg/` and instance definitions to `ra_gen/`. Your application can then call `g_<module_name>.p_api->open(...)` as with any HAL driver.
+  </Step>
+</Steps>
+
+<Tip>
+Middleware modules that require an RTOS (such as NetX Duo) must be added on top of a FreeRTOS or ThreadX stack. RASC warns you if you add an RTOS-dependent module without first adding an RTOS component.
+</Tip>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="RTOS integration" icon="list-tree" href="/middleware/rtos-integration">
+    Detailed guide to using FreeRTOS and ThreadX with FSP.
+  </Card>
+  <Card title="Networking" icon="network-wired" href="/middleware/networking">
+    Set up LwIP or NetX Duo on RA Ethernet devices.
+  </Card>
+  <Card title="Security" icon="shield" href="/middleware/security">
+    Use Mbed TLS and the RSIP hardware accelerator.
+  </Card>
+  <Card title="Motor control" icon="rotate" href="/middleware/motor-control">
+    Build a FOC motor drive with the rm_motor middleware stack.
+  </Card>
+</CardGroup>

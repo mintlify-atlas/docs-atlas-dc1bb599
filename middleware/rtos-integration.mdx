@@ -1,0 +1,205 @@
+---
+title: 'RTOS Integration'
+description: 'Integrate FreeRTOS or Eclipse ThreadX with FSP to build preemptive multitasking applications on RA MCUs.'
+keywords: ['FreeRTOS', 'ThreadX', 'RTOS', 'rm_freertos_port', 'rm_threadx_port', 'heap', 'tasks']
+---
+
+FSP supports two real-time operating systems out of the box: **FreeRTOS** (via `rm_freertos_port`) and **Eclipse ThreadX** (via `rm_threadx_port`). Both are integrated at the BSP level so FSP drivers remain usable from tasks with minimal configuration.
+
+<Note>
+Azure RTOS has been transitioned to the Eclipse Foundation and is now published under the name **Eclipse ThreadX**. All FSP modules previously labelled "Azure RTOS ThreadX" correspond to the same kernel now maintained at [eclipse-threadx/threadx](https://github.com/eclipse-threadx/threadx).
+</Note>
+
+## Supported RTOS ports
+
+<CardGroup cols={2}>
+  <Card title="FreeRTOS Port" icon="microchip" href="https://renesas.github.io/fsp/group___r_m___f_r_e_e_r_t_o_s___p_o_r_t.html">
+    `rm_freertos_port` — Cortex-M port with TrustZone Non-Secure support, SysTick configuration, and MPU wrappers.
+  </Card>
+  <Card title="Eclipse ThreadX Port" icon="cpu" href="https://renesas.github.io/fsp/group___r_m___t_h_r_e_a_d_x___p_o_r_t.html">
+    `rm_threadx_port` — Eclipse ThreadX kernel port for RA devices, enabling the full ThreadX ecosystem including NetX Duo, FileX, and USBX.
+  </Card>
+</CardGroup>
+
+## Selecting an RTOS in RASC
+
+<Steps>
+  <Step title="Open the stacks configurator">
+    In e2 studio, double-click `configuration.xml` and select the **Stacks** tab.
+  </Step>
+  <Step title="Add a new thread">
+    Click **New Thread**. RASC generates a thread object and an entry function stub in `src/`.
+  </Step>
+  <Step title="Add the RTOS port module">
+    Under **New Stack**, expand the **RTOS** category and add either **FreeRTOS Port (rm_freertos_port)** or **Azure RTOS ThreadX Port (rm_threadx_port)**.
+  </Step>
+  <Step title="Configure heap and stack sizes">
+    Set `configTOTAL_HEAP_SIZE` in `FreeRTOSConfig.h`, or the ThreadX byte pool size in the ThreadX init callback. Stack size per thread is set in the stack properties panel.
+  </Step>
+  <Step title="Generate code">
+    Click **Generate Project Content**. RASC emits thread entry functions, initializes the RTOS, and calls `main()` which starts the scheduler.
+  </Step>
+</Steps>
+
+## FreeRTOS heap allocation options
+
+FreeRTOS ships five heap implementations. Select the one that matches your application's allocation pattern.
+
+| Scheme | Module | Behaviour | Use when |
+|--------|--------|-----------|----------|
+| Heap 1 | `FreeRTOS Heap 1` | Allocate only, never free | Simple static applications |
+| Heap 2 | `FreeRTOS Heap 2` | Best-fit, no coalescence | Fixed-size allocations |
+| Heap 3 | `FreeRTOS Heap 3` | Wraps `malloc`/`free` | Toolchain heap already configured |
+| Heap 4 | `FreeRTOS Heap 4` | Best-fit with coalescence | General purpose (recommended default) |
+| Heap 5 | `FreeRTOS Heap 5` | Heap 4 across multiple memory regions | Devices with non-contiguous RAM |
+
+<Tip>
+Heap 4 is the most commonly used scheme on RA devices. Use Heap 5 on RA8 series parts that have both internal SRAM and external SDRAM and want the allocator to span both.
+</Tip>
+
+Add the desired heap module to your FreeRTOS stack in RASC; only one scheme can be active at a time.
+
+## Thread-safe FSP driver operations
+
+FSP drivers that use interrupts and shared hardware state are **not inherently thread-safe**. When multiple tasks call the same driver instance, you must serialize access. FSP provides two patterns:
+
+**Mutex guard pattern** (recommended for most drivers):
+
+```c
+#include "FreeRTOS.h"
+#include "semphr.h"
+#include "r_sci_uart.h"
+
+static SemaphoreHandle_t g_uart_mutex;
+
+void uart_task_init(void)
+{
+    g_uart_mutex = xSemaphoreCreateMutex();
+    configASSERT(g_uart_mutex != NULL);
+}
+
+fsp_err_t uart_write_safe(uint8_t * p_buf, uint32_t len)
+{
+    fsp_err_t err = FSP_SUCCESS;
+
+    if (xSemaphoreTake(g_uart_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+    {
+        err = R_SCI_UART_Write(&g_uart0_ctrl, p_buf, len);
+        xSemaphoreGive(g_uart_mutex);
+    }
+    else
+    {
+        err = FSP_ERR_TIMEOUT;
+    }
+    return err;
+}
+```
+
+**Event flag pattern** (for interrupt-to-task synchronization):
+
+```c
+#include "FreeRTOS.h"
+#include "event_groups.h"
+
+#define UART_TX_COMPLETE_BIT    (1U << 0)
+
+static EventGroupHandle_t g_uart_events;
+
+/* Called from the SCI UART callback */
+void sci_uart_callback(uart_callback_args_t * p_args)
+{
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+    if (p_args->event == UART_EVENT_TX_COMPLETE)
+    {
+        xEventGroupSetBitsFromISR(g_uart_events,
+                                  UART_TX_COMPLETE_BIT,
+                                  &xHigherPriorityTaskWoken);
+    }
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
+```
+
+<Note>
+Always use `FromISR` variants of FreeRTOS API calls (e.g. `xSemaphoreGiveFromISR`, `xEventGroupSetBitsFromISR`) inside FSP driver callbacks, since callbacks execute in interrupt context.
+</Note>
+
+## FreeRTOS task using an FSP UART driver
+
+The example below creates a FreeRTOS task that opens the SCI UART driver, sends a greeting, then waits for received bytes using a queue populated from the driver callback.
+
+```c
+#include "FreeRTOS.h"
+#include "task.h"
+#include "queue.h"
+#include "hal_data.h"   /* Generated by RASC — contains g_uart0, g_uart0_ctrl, g_uart0_cfg */
+
+#define RX_QUEUE_LEN    64U
+
+static QueueHandle_t g_rx_queue;
+
+/* UART event callback — runs in interrupt context */
+void g_uart0_callback(uart_callback_args_t * p_args)
+{
+    BaseType_t xWoken = pdFALSE;
+
+    if (p_args->event == UART_EVENT_RX_CHAR)
+    {
+        uint8_t byte = (uint8_t) p_args->data;
+        xQueueSendFromISR(g_rx_queue, &byte, &xWoken);
+        portYIELD_FROM_ISR(xWoken);
+    }
+}
+
+/* Task entry point */
+void uart_task_entry(void * pvParameters)
+{
+    FSP_PARAMETER_NOT_USED(pvParameters);
+
+    /* Create the receive queue */
+    g_rx_queue = xQueueCreate(RX_QUEUE_LEN, sizeof(uint8_t));
+    configASSERT(g_rx_queue != NULL);
+
+    /* Open the UART driver */
+    fsp_err_t err = R_SCI_UART_Open(&g_uart0_ctrl, &g_uart0_cfg);
+    configASSERT(FSP_SUCCESS == err);
+
+    /* Send a greeting */
+    static const uint8_t greeting[] = "FSP + FreeRTOS ready\r\n";
+    R_SCI_UART_Write(&g_uart0_ctrl, greeting, sizeof(greeting) - 1U);
+
+    uint8_t rx_byte;
+    for (;;)
+    {
+        /* Block indefinitely waiting for a received character */
+        if (xQueueReceive(g_rx_queue, &rx_byte, portMAX_DELAY) == pdTRUE)
+        {
+            /* Echo the received byte back */
+            R_SCI_UART_Write(&g_uart0_ctrl, &rx_byte, 1U);
+        }
+    }
+}
+```
+
+The task entry function name (`uart_task_entry`) and the generated driver handles (`g_uart0_ctrl`, `g_uart0_cfg`) are set in RASC. RASC also inserts the task creation call into the auto-generated `main()` before `vTaskStartScheduler()`.
+
+## TrustZone Non-Secure builds
+
+When `BSP_TZ_NONSECURE_BUILD` is defined, the FreeRTOS port (`rm_freertos_port/port.c`) includes `tz_context.h` and sets the initial EXC_RETURN value to `0xFFFFFFBC` so that tasks launch in the Non-Secure state. The `rm_tz_context` module (see [Security](/middleware/security)) manages the TrustZone context save/restore on context switch.
+
+## Companion middleware
+
+<CardGroup cols={2}>
+  <Card title="FreeRTOS+TCP" icon="network" href="https://www.freertos.org/FreeRTOS-Plus/FreeRTOS_Plus_TCP/TCP_IP_Configuration.html">
+    Lightweight IPv4/IPv6 TCP/IP stack that integrates directly with the FSP Ethernet driver via `rm_freertos_plus_tcp`. See [Networking](/middleware/networking).
+  </Card>
+  <Card title="FreeRTOS+FAT" icon="hard-drive" href="https://www.freertos.org/FreeRTOS-Plus/FreeRTOS_Plus_FAT/index.html">
+    FAT file system layer for block media (SD card, SPI flash, RAM disk). Pairs with `rm_block_media_sdmmc` and `rm_block_media_spi`.
+  </Card>
+  <Card title="NetX Duo" icon="globe" href="https://github.com/eclipse-threadx/rtos-docs/blob/main/rtos-docs/netx-duo/index.md">
+    Full-featured IPv4/IPv6 dual-stack networking for Eclipse ThreadX. Includes MQTT, HTTP, DNS, DHCP, TLS via NetX Secure.
+  </Card>
+  <Card title="FileX" icon="folder" href="https://github.com/eclipse-threadx/rtos-docs/blob/main/rtos-docs/filex/index.md">
+    FAT-compatible file system for Eclipse ThreadX. Supports block media, LevelX NOR flash wear levelling, and USBX mass storage.
+  </Card>
+</CardGroup>

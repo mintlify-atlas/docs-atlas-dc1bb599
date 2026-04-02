@@ -1,80 +1,153 @@
 ---
 title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+description: "Install FSP with e² studio and write your first Renesas RA application."
+keywords: ["FSP", "e2 studio", "install", "quickstart", "blinky", "RA MCU"]
 ---
 
-## Get started in three steps
+This guide gets you from zero to a running FSP project on a Renesas RA kit. Choose the path that matches your situation.
 
-Get your documentation site running locally and make your first customization.
+## Installation
 
-### Step 1: Set up your local environment
+<Tabs>
+  <Tab title="New users">
+    If you have not installed e² studio before, use the bundled installer. It includes e² studio, all FSP packs, GCC and LLVM toolchains, and every other tool required — no separate downloads needed.
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    <Steps>
+      <Step title="Download the installer">
+        Go to the [FSP v6.4.0 release page](https://github.com/renesas/fsp/releases/tag/v6.4.0) and download the **FSP with e² studio Installer** from the Assets section.
 
-### Step 2: Deploy your changes
+        The file is named `setup_fsp_v6_4_0_e2s_v2025-xx.exe` (Windows) or the equivalent for your platform.
+      </Step>
+      <Step title="Run the installer">
+        Launch the installer and follow the on-screen prompts. You can choose which toolchains to install (GCC, LLVM, or both). All FSP packs and required tools are installed automatically.
+      </Step>
+      <Step title="Launch e² studio">
+        Open e² studio. On first launch it will prompt you to select a workspace directory.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="Existing users">
+    If you already have e² studio installed, download only the FSP packs and extract them into your e² studio support directory.
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    <Warning>
+      FSP v6.4.0 requires a minimum e² studio version of **2025-12**. Check your installed version at **Help → About e² studio** before updating packs.
+    </Warning>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    The full version requirements for reference:
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    | FSP version | Minimum e² studio version |
+    |-------------|--------------------------|
+    | 6.4.0       | 2025-12                  |
+    | 6.3.0       | 2025-12                  |
+    | 6.2.0       | 2025-10                  |
+    | 6.1.0       | 2025-07                  |
+    | 6.0.0       | 2025-04.1                |
+    | 5.9.0       | 2025-04                  |
+    | 5.8.0       | 2025-01                  |
+    | 5.6.0       | 2024-10                  |
+    | 5.5.0       | 2024-07                  |
 
-### Step 3: Go live
+    <Steps>
+      <Step title="Download the packs">
+        Go to the [FSP v6.4.0 release page](https://github.com/renesas/fsp/releases/tag/v6.4.0) and download `FSP_Packs_6.4.0.zip` from the Assets section. A self-extracting `.exe` installer is also available for Windows.
+      </Step>
+      <Step title="Locate your e² studio support directory">
+        In e² studio, click **Help → About e² studio**, then click **Installation Details** and select the **Support Folders** tab. The path shown is typically:
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+        ```text
+        ~/.eclipse/com.renesas.platform_<unique_number>
+        ```
+
+        <Note>
+          e² studio must have been run at least once for this directory to exist. If you have multiple e² studio installations, each has its own support directory.
+        </Note>
+      </Step>
+      <Step title="Extract the packs">
+        Extract the contents of `FSP_Packs_6.4.0.zip` into the support directory found in the previous step.
+      </Step>
+      <Step title="Restart e² studio">
+        Close and reopen e² studio. The new FSP packs will be picked up automatically.
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+## Create a new project
+
+<Steps>
+  <Step title="Open the new project wizard">
+    In e² studio, click **File → New → C/C++ Project**. In the window that appears, select **Renesas RA** in the left pane and choose a project template.
+  </Step>
+  <Step title="Configure your board and MCU">
+    The RA Smart Configurator (RASC) opens automatically. Select your target kit and MCU from the dropdown lists.
+  </Step>
+  <Step title="Add FSP modules in the Stacks tab">
+    In the RASC **Stacks** tab, click **New Stack** and add the modules you need. For the blinky example below, add **I/O Port (r_ioport)** — it is included by default in most project templates.
+  </Step>
+  <Step title="Generate code">
+    Click **Generate Project Content** in RASC. FSP generates initialization code, pin configuration, and module instance definitions into your project's `src/` directory.
+  </Step>
+</Steps>
+
+## Blinky example
+
+The following example toggles an LED connected to port pin `BSP_IO_PORT_01_PIN_00` in a loop. It uses the `R_IOPORT_Open()` and `R_IOPORT_PinWrite()` FSP APIs from the I/O port HAL driver.
+
+```c
+#include "hal_data.h"
+
+/* g_ioport is the IOPORT instance generated by RASC */
+extern const ioport_instance_t g_ioport;
+
+void hal_entry(void)
+{
+    /* Open the IOPORT driver with the pin configuration generated by RASC */
+    R_IOPORT_Open(&g_ioport_ctrl, g_ioport.p_cfg);
+
+    while (1)
+    {
+        /* Set the LED pin high */
+        R_IOPORT_PinWrite(&g_ioport_ctrl, BSP_IO_PORT_01_PIN_00, BSP_IO_LEVEL_HIGH);
+
+        /* Simple delay */
+        R_BSP_SoftwareDelay(500U, BSP_DELAY_UNITS_MILLISECONDS);
+
+        /* Set the LED pin low */
+        R_IOPORT_PinWrite(&g_ioport_ctrl, BSP_IO_PORT_01_PIN_00, BSP_IO_LEVEL_LOW);
+
+        R_BSP_SoftwareDelay(500U, BSP_DELAY_UNITS_MILLISECONDS);
+    }
+}
+```
+
+Key points about this code:
+
+- `g_ioport_ctrl` and `g_ioport` are generated by RASC based on your pin configuration. Do not declare them manually.
+- `BSP_IO_PORT_01_PIN_00` is a BSP-defined constant for port P1, pin 0. Replace it with the port/pin connected to your kit's LED — check your kit's schematic or the FSP example projects.
+- `R_IOPORT_Open()` must be called before any pin write or read operations. In projects with a `bsp_init()` call, IOPORT is typically opened there; avoid calling it twice.
+- `R_BSP_SoftwareDelay()` is a busy-wait delay provided by the BSP. For production code, use a timer-based delay or an RTOS delay instead.
+
+<Tip>
+  Renesas maintains a repository of ready-to-run example projects at [github.com/renesas/ra-fsp-examples](https://github.com/renesas/ra-fsp-examples). These cover UART, SPI, USB, networking, motor control, and many other use cases for all supported kits.
+</Tip>
+
+## Using RASC with IAR or Keil MDK
+
+If you prefer to use IAR Embedded Workbench or Keil MDK instead of e² studio, use the standalone RA Smart Configurator (RASC). See the [RASC User Guide for MDK and IAR](https://renesas.github.io/fsp/_s_t_a_r_t__d_e_v.html#RASC-MDK-IAR-user-guide) for setup instructions.
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Introduction" icon="book-open" href="/introduction">
+    Understand the FSP architecture layers and key capabilities
+  </Card>
+  <Card title="Supported hardware" icon="microchip" href="/supported-hardware">
+    Find your RA kit in the list of supported hardware
+  </Card>
+  <Card title="HAL drivers" icon="sliders" href="/concepts/hal-drivers">
+    Learn how to use FSP peripheral drivers in your application
+  </Card>
+  <Card title="Example projects" icon="code" href="https://github.com/renesas/ra-fsp-examples">
+    Browse ready-to-run FSP example projects on GitHub
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
